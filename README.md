@@ -1,10 +1,13 @@
 # Ultimate AI Labeller
 
-Desktop image annotation tool for object detection datasets (Tkinter + Ultralytics).
+Desktop image annotation tool for object detection datasets (Tkinter + Ultralytics), with a separate web project.
 
 ## Features
 
 - Bounding-box annotation with drag, move, and resize handles
+- Multi-select boxes (`Shift/Ctrl + Click`) for batch class reassignment and delete
+- Select all boxes in current image (`Ctrl+A`)
+- Nested/overlapping box picking prefers inner (smaller) box for easier adjustment
 - Undo/redo history (`Ctrl+Z`, `Ctrl+Y`)
 - Image navigation (`F` next/save, `D` previous)
 - Auto red-region proposal (`A`)
@@ -26,6 +29,11 @@ Desktop image annotation tool for object detection datasets (Tkinter + Ultralyti
 - Export all annotations by format:
   - `YOLO (.txt)` full dataset export
   - `JSON` full dataset export (per-image annotation json)
+
+## Repositories
+
+- Desktop app (this repo): `https://github.com/JamesChang666/ultimate_ai_labeller`
+- Web app (separate repo): `https://github.com/JamesChang666/labeller_web`
 
 ## Dataset Structure
 
@@ -66,7 +74,7 @@ pip install ultimate_ai_labeller
 From local wheel:
 
 ```bash
-pip install dist/ultimate_ai_labeller-0.1.5-py3-none-any.whl
+pip install dist/ultimate_ai_labeller-0.1.7-py3-none-any.whl
 ```
 
 From source:
@@ -93,6 +101,20 @@ Or:
 python src/ai_labeller/main.py
 ```
 
+## Web Version
+
+This desktop repository includes local development files under `web_labeller/`, but the maintained web repository is:
+
+- `https://github.com/JamesChang666/labeller_web`
+
+Run locally:
+
+```bash
+cd web_labeller
+pip install -r requirements.txt
+uvicorn app:app --host 127.0.0.1 --port 8000 --reload
+```
+
 ## Shortcuts
 
 - `F`: save and next image
@@ -100,6 +122,7 @@ python src/ai_labeller/main.py
 - `A`: auto red detection
 - `Ctrl+Z`: undo
 - `Ctrl+Y`: redo
+- `Ctrl+A`: select all boxes in current image
 - `Delete`: delete selected box
 
 ## Notes
