@@ -20,6 +20,14 @@ Desktop image annotation tool for object detection datasets (Tkinter + Ultralyti
   - Official model mode (`yolo26m.pt` path by default)
   - Import custom models (`.pt`, `.onnx`) via `Browse Model`
   - Select model from dropdown library
+- Train from existing labels:
+  - Choose training range by index
+  - Save training artifacts to selected output folder
+  - Non-blocking background training (continue labeling while training)
+  - Built-in training monitor (command/log/progress/ETA)
+- Class management:
+  - Add / rename / delete class in class table
+  - Deleting a class reindexes following class IDs automatically
 - Auto-detect and propagate options
 - Scrollable right settings panel
 - Remove/restore bad frames from split
@@ -74,7 +82,7 @@ pip install ultimate_ai_labeller
 From local wheel:
 
 ```bash
-pip install dist/ultimate_ai_labeller-0.1.7-py3-none-any.whl
+pip install dist/ultimate_ai_labeller-0.1.8-py3-none-any.whl
 ```
 
 From source:
@@ -131,3 +139,4 @@ uvicorn app:app --host 127.0.0.1 --port 8000 --reload
 - If the official model file is unavailable locally, import a custom `.pt/.onnx` model from the UI.
 - To use your own Tk app icon, put `app_icon.png` in `src/ai_labeller/assets/`.
 - Session file: `~/.ai_labeller_session.json`.
+- Project progress YAML: `<project_root>/.ai_labeller_progress.yaml` (resume split/image after reopen).

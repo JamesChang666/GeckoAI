@@ -7,7 +7,13 @@ import glob
 import json
 import math
 import os
+import queue
+import re
 import shutil
+import subprocess
+import sys
+import threading
+import time
 import tkinter as tk
 from collections import deque
 from importlib import resources
@@ -139,10 +145,13 @@ LANG_MAP = {
         "current_class": "[ZH] Current Class",
         "edit_classes": "[ZH] Edit Classes",
         "reassign_class": "[ZH] Reassign Selected Class",
-        "clear_labels": "[ZH] Clear Labels (Current)",
+        "clear_labels": "[ZH] Delete All Labels",
         "add": "[ZH] Add",
         "rename": "[ZH] Rename",
         "apply": "[ZH] Apply",
+        "delete_class": "[ZH] Delete Class",
+        "delete_class_confirm": "[ZH] Delete class '{name}' (ID {idx})?\nLabels with this class in current image will be reassigned.",
+        "delete_class_last": "[ZH] Cannot delete the last class.",
         "class_name": "[ZH] Class Name",
         "rename_prompt": "[ZH] Modify '{name}':",
         "add_prompt": "[ZH] Class name:",
@@ -159,8 +168,27 @@ LANG_MAP = {
         "foundation_mode": "[ZH] Foundation Assist",
         "propagate": "[ZH] Propagate",
         "run_detection": "[ZH] Run Detection",
+        "train_from_labels": "以現有標註開始訓練",
         "detection_model": "[ZH] Detection Model",
         "browse_model": "[ZH] Browse Model",
+        "train_range_start": "起始索引（從 1 開始）",
+        "train_range_end": "結束索引（從 1 開始）",
+        "train_epochs": "訓練回合數（Epochs）",
+        "train_imgsz": "訓練影像尺寸",
+        "select_train_output": "選擇訓練輸出資料夾",
+        "train_no_project": "尚未載入資料集。",
+        "train_no_labels": "找不到可用於訓練的已標註影像。",
+        "train_bad_range": "區間無效，請輸入正確的起始與結束索引。",
+        "train_done": "訓練完成。\n輸出位置：{path}",
+        "train_failed": "訓練失敗：{err}",
+        "train_monitor": "訓練監控",
+        "train_status": "狀態",
+        "train_progress": "進度",
+        "train_eta": "預估剩餘時間",
+        "train_idle": "閒置",
+        "train_running": "訓練中",
+        "train_command": "命令",
+        "train_already_running": "目前已有訓練在執行中。",
         "use_official_yolo26n": "[ZH] Use Official yolo26m.pt",
         "export": "[ZH] Export All",
         "prev": "[ZH] Previous",
@@ -213,10 +241,13 @@ LANG_MAP = {
         "current_class": "Current Class",
         "edit_classes": "Edit Classes",
         "reassign_class": "Reassign Selected Class",
-        "clear_labels": "Clear Labels (Current)",
+        "clear_labels": "Delete All Labels",
         "add": "Add",
         "rename": "Rename",
         "apply": "Apply",
+        "delete_class": "Delete Class",
+        "delete_class_confirm": "Delete class '{name}' (ID {idx})?\nLabels with this class in current image will be reassigned.",
+        "delete_class_last": "Cannot delete the last class.",
         "class_name": "Class Name",
         "rename_prompt": "Modify '{name}':",
         "add_prompt": "Class name:",
@@ -233,8 +264,27 @@ LANG_MAP = {
         "foundation_mode": "Foundation Assist",
         "propagate": "Propagate",
         "run_detection": "Run Detection",
+        "train_from_labels": "Train From Labels",
         "detection_model": "Detection Model",
         "browse_model": "Browse Model",
+        "train_range_start": "Start Index (1-based)",
+        "train_range_end": "End Index (1-based)",
+        "train_epochs": "Epochs",
+        "train_imgsz": "Image Size",
+        "select_train_output": "Select Training Output Folder",
+        "train_no_project": "No dataset loaded.",
+        "train_no_labels": "No labeled images found for training.",
+        "train_bad_range": "Invalid range. Please input valid start/end index.",
+        "train_done": "Training finished.\nOutput: {path}",
+        "train_failed": "Training failed: {err}",
+        "train_monitor": "Training Monitor",
+        "train_status": "Status",
+        "train_progress": "Progress",
+        "train_eta": "ETA",
+        "train_idle": "Idle",
+        "train_running": "Running",
+        "train_command": "Command",
+        "train_already_running": "Training is already running.",
         "use_official_yolo26n": "Use Official yolo26m.pt",
         "export": "Export All",
         "prev": "Previous",
@@ -343,6 +393,14 @@ class UltimateLabeller:
         self._folder_dialog_open = False
         self._startup_dialog_shown = False
         self._startup_dialog_open = False
+        self.training_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self.training_thread: threading.Thread | None = None
+        self.training_process: subprocess.Popen[str] | None = None
+        self.training_running = False
+        self.training_start_time: float | None = None
+        self.training_total_epochs = 0
+        self.training_current_epoch = 0
+        self.train_command_var = tk.StringVar(value="")
         
         self.setup_custom_style()
         self.setup_ui()
@@ -1209,6 +1267,87 @@ class UltimateLabeller:
             command=self.run_yolo_detection,
             bg=COLORS["success"]
         ).pack(fill="x", pady=(12, 0))
+
+        self.create_primary_button(
+            content,
+            text=LANG_MAP[self.lang].get("train_from_labels", "Train From Labels"),
+            command=self.start_training_from_labels,
+            bg=COLORS["warning"],
+        ).pack(fill="x", pady=(8, 0))
+
+        tk.Label(
+            content,
+            text=LANG_MAP[self.lang].get("train_monitor", "Training Monitor"),
+            font=self.font_bold,
+            fg=COLORS["text_primary"],
+            bg=COLORS["bg_white"],
+            anchor="w",
+        ).pack(fill="x", pady=(12, 6))
+
+        self.lbl_train_status = tk.Label(
+            content,
+            text=f"{LANG_MAP[self.lang].get('train_status', 'Status')}: {LANG_MAP[self.lang].get('train_idle', 'Idle')}",
+            font=self.font_primary,
+            fg=COLORS["text_secondary"],
+            bg=COLORS["bg_white"],
+            anchor="w",
+        )
+        self.lbl_train_status.pack(fill="x")
+
+        self.lbl_train_progress = tk.Label(
+            content,
+            text=f"{LANG_MAP[self.lang].get('train_progress', 'Progress')}: -",
+            font=self.font_primary,
+            fg=COLORS["text_secondary"],
+            bg=COLORS["bg_white"],
+            anchor="w",
+        )
+        self.lbl_train_progress.pack(fill="x")
+
+        self.lbl_train_eta = tk.Label(
+            content,
+            text=f"{LANG_MAP[self.lang].get('train_eta', 'ETA')}: -",
+            font=self.font_primary,
+            fg=COLORS["text_secondary"],
+            bg=COLORS["bg_white"],
+            anchor="w",
+        )
+        self.lbl_train_eta.pack(fill="x", pady=(0, 4))
+
+        tk.Label(
+            content,
+            text=LANG_MAP[self.lang].get("train_command", "Command"),
+            font=self.font_primary,
+            fg=COLORS["text_secondary"],
+            bg=COLORS["bg_white"],
+            anchor="w",
+        ).pack(fill="x")
+
+        self.entry_train_cmd = tk.Entry(
+            content,
+            textvariable=self.train_command_var,
+            font=self.font_mono,
+            state="readonly",
+            readonlybackground=COLORS["bg_light"],
+            fg=COLORS["text_primary"],
+        )
+        self.entry_train_cmd.pack(fill="x", pady=(0, 6))
+
+        log_wrap = tk.Frame(content, bg=COLORS["bg_white"])
+        log_wrap.pack(fill="both", expand=True)
+        self.txt_train_log = tk.Text(
+            log_wrap,
+            height=8,
+            wrap="word",
+            font=self.font_mono,
+            bg=COLORS["bg_light"],
+            fg=COLORS["text_primary"],
+            relief="flat",
+        )
+        self.txt_train_log.pack(side="left", fill="both", expand=True)
+        sb_log = ttk.Scrollbar(log_wrap, orient="vertical", command=self.txt_train_log.yview)
+        sb_log.pack(side="right", fill="y")
+        self.txt_train_log.configure(yscrollcommand=sb_log.set)
     
     def create_shortcut_card(self, parent):
         """Render shortcut hint list."""
@@ -1469,6 +1608,59 @@ class UltimateLabeller:
 
         return fallback_idx
 
+    def _project_progress_yaml_path(self, project_root: str | None = None) -> str | None:
+        root = (project_root or self.project_root or "").strip()
+        if not root:
+            return None
+        return os.path.join(root, ".ai_labeller_progress.yaml")
+
+    def _write_project_progress_yaml(self) -> None:
+        yaml_path = self._project_progress_yaml_path()
+        if not yaml_path:
+            return
+        image_name = ""
+        image_index = self.current_idx
+        if self.image_files and 0 <= self.current_idx < len(self.image_files):
+            image_name = os.path.basename(self.image_files[self.current_idx])
+
+        def q(value: str) -> str:
+            return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+        lines = [
+            "# AI Labeller progress",
+            f"project_root: {q(self.project_root)}",
+            f"split: {q(self.current_split)}",
+            f"image_name: {q(image_name)}",
+            f"image_index: {image_index}",
+            f"updated_at: {q(datetime.datetime.now().isoformat(timespec='seconds'))}",
+        ]
+        try:
+            atomic_write_text(yaml_path, "\n".join(lines) + "\n")
+        except Exception:
+            self.logger.exception("Failed to write project progress yaml: %s", yaml_path)
+
+    def _read_project_progress_yaml(self, project_root: str) -> dict[str, str]:
+        yaml_path = self._project_progress_yaml_path(project_root)
+        if not yaml_path or not os.path.isfile(yaml_path):
+            return {}
+        data: dict[str, str] = {}
+        try:
+            with open(yaml_path, "r", encoding="utf-8") as f:
+                for raw in f:
+                    line = raw.strip()
+                    if not line or line.startswith("#") or ":" not in line:
+                        continue
+                    key, value = line.split(":", 1)
+                    key = key.strip()
+                    value = value.strip()
+                    if value.startswith('"') and value.endswith('"') and len(value) >= 2:
+                        value = value[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+                    data[key] = value
+        except Exception:
+            self.logger.exception("Failed to read project progress yaml: %s", yaml_path)
+            return {}
+        return data
+
     def save_session_state(self) -> None:
         state = SessionState(
             project_root=self.project_root,
@@ -1483,6 +1675,7 @@ class UltimateLabeller:
             atomic_write_json(self.session_path, state.__dict__)
         except Exception:
             self.logger.exception("Failed to save session state")
+        self._write_project_progress_yaml()
 
     def load_session_state(self) -> None:
         if not os.path.exists(self.session_path):
@@ -1971,6 +2164,11 @@ class UltimateLabeller:
             self.save_current()
         except Exception:
             self.logger.exception("Failed while saving on close")
+        if self.training_process is not None and self.training_process.poll() is None:
+            try:
+                self.training_process.terminate()
+            except Exception:
+                self.logger.exception("Failed to terminate training process on close")
         if self.img_pil is not None:
             self.img_pil.close()
             self.img_pil = None
@@ -2362,6 +2560,46 @@ class UltimateLabeller:
                 self.class_names.append(new_name)
                 refresh()
 
+        def delete_class():
+            sel = tree.selection()
+            if not sel:
+                return
+            if len(self.class_names) <= 1:
+                messagebox.showinfo(L["class_mgmt"], L.get("delete_class_last", "Cannot delete the last class."))
+                return
+            del_idx = int(tree.item(sel[0])["values"][0])
+            del_name = self.class_names[del_idx]
+            if not messagebox.askyesno(
+                L["class_mgmt"],
+                L.get(
+                    "delete_class_confirm",
+                    "Delete class '{name}' (ID {idx})?\nLabels with this class in current image will be reassigned.",
+                ).format(name=del_name, idx=del_idx),
+                parent=win,
+            ):
+                return
+
+            # Keep current-image boxes valid after class-id reindex.
+            self.push_history()
+            self._reindex_dataset_labels_after_class_delete(del_idx)
+            remapped_rects: list[list[float]] = []
+            for rect in self.rects:
+                cid = int(rect[4])
+                if cid == del_idx:
+                    continue
+                if cid > del_idx:
+                    rect[4] = cid - 1
+                remapped_rects.append(rect)
+            self.rects = remapped_rects
+
+            self.class_names.pop(del_idx)
+            refresh()
+            preferred_idx = min(max(0, del_idx), len(self.class_names) - 1)
+            self._refresh_class_dropdown(preferred_idx=preferred_idx)
+            self._set_selected_indices([])
+            self._sync_class_combo_with_selection()
+            self.render()
+
         def on_double_click(e):
             row = tree.identify_row(e.y)
             if row:
@@ -2395,12 +2633,24 @@ class UltimateLabeller:
             padx=20,
             pady=10
         ).pack(side="left", expand=True, fill="x", padx=(5, 0))
+
+        tk.Button(
+            btn_frame,
+            text=L.get("delete_class", "Delete Class"),
+            command=delete_class,
+            bg=COLORS["danger"],
+            fg=COLORS["text_white"],
+            font=self.font_primary,
+            relief="flat",
+            padx=20,
+            pady=10
+        ).pack(side="left", expand=True, fill="x", padx=(5, 0))
         
         tk.Button(
             win,
             text=L["apply"],
             command=lambda: [
-                self.combo_cls.config(values=self.class_names),
+                self._refresh_class_dropdown(),
                 self.render(),
                 win.destroy()
             ],
@@ -2503,15 +2753,9 @@ class UltimateLabeller:
         """???????????"""
         if not self.rects:
             return
-        self.push_history()
-        self.rects = []
-        self.selected_idx = None
-        self.selected_indices = set()
-        self.active_handle = None
-        self.is_moving_box = False
-        self.drag_start = None
-        self.temp_rect_coords = None
-        self.render()
+        # Keep behavior identical to Ctrl+A then Delete.
+        self.select_all_boxes()
+        self.delete_selected()
 
     
     def _build_removed_path(self, kind, src_path):
@@ -2798,10 +3042,74 @@ class UltimateLabeller:
             self.logger.exception("Failed to save label file: %s", label_path)
             messagebox.showerror("Error", f"Failed to save label file:\n{label_path}")
             return
+
+    def _reindex_dataset_labels_after_class_delete(self, deleted_idx: int) -> None:
+        if not self.project_root:
+            return
+
+        label_files: list[str] = []
+        split_roots = [s for s in ("train", "val", "test") if os.path.isdir(f"{self.project_root}/labels/{s}")]
+        if split_roots:
+            for split in split_roots:
+                label_files.extend(glob.glob(f"{self.project_root}/labels/{split}/*.txt"))
+        else:
+            label_files.extend(glob.glob(f"{self.project_root}/labels/train/*.txt"))
+
+        for lbl_path in label_files:
+            try:
+                with open(lbl_path, "r", encoding="utf-8") as f:
+                    raw_lines = f.readlines()
+            except Exception:
+                self.logger.exception("Failed to read label file while deleting class: %s", lbl_path)
+                continue
+
+            updated_lines: list[str] = []
+            for raw in raw_lines:
+                line = raw.strip()
+                if not line:
+                    continue
+                parts = line.split()
+                if len(parts) < 5:
+                    updated_lines.append(raw if raw.endswith("\n") else raw + "\n")
+                    continue
+                try:
+                    cid = int(float(parts[0]))
+                except ValueError:
+                    updated_lines.append(raw if raw.endswith("\n") else raw + "\n")
+                    continue
+
+                if cid == deleted_idx:
+                    continue
+                if cid > deleted_idx:
+                    parts[0] = str(cid - 1)
+                    updated_lines.append(" ".join(parts) + "\n")
+                else:
+                    updated_lines.append(raw if raw.endswith("\n") else raw + "\n")
+
+            if updated_lines:
+                try:
+                    atomic_write_text(lbl_path, "".join(updated_lines))
+                except Exception:
+                    self.logger.exception("Failed to write updated label file: %s", lbl_path)
+            else:
+                try:
+                    if os.path.exists(lbl_path):
+                        os.remove(lbl_path)
+                except OSError:
+                    self.logger.exception("Failed to remove empty label file: %s", lbl_path)
     
     def load_project_from_path(self, directory, preferred_image=None, save_session=True):
         self.project_root = directory.replace('\\', '/')
         self.ensure_yolo_label_dirs(self.project_root)
+
+        if not preferred_image:
+            progress = self._read_project_progress_yaml(self.project_root)
+            progress_split = progress.get("split", "")
+            progress_image = progress.get("image_name", "")
+            if progress_split in {"train", "val", "test"}:
+                self.current_split = progress_split
+            if progress_image:
+                preferred_image = progress_image
 
         split_files = {
             split: self._list_split_images(split)
@@ -3033,6 +3341,389 @@ class UltimateLabeller:
             self.logger.exception("YOLO detection failed")
             messagebox.showerror("Detection Error", f"YOLO detection failed:\n{exc}")
 
+    def _list_split_labeled_images_for_root(self, project_root: str, split: str) -> list[str]:
+        labeled: list[str] = []
+        for img_path in self._list_split_images_for_root(project_root, split):
+            base = os.path.splitext(os.path.basename(img_path))[0]
+            lbl_path = f"{project_root}/labels/{split}/{base}.txt"
+            if os.path.isfile(lbl_path) and os.path.getsize(lbl_path) > 0:
+                labeled.append(img_path)
+        return labeled
+
+    def _list_flat_labeled_images_for_root(self, project_root: str) -> list[str]:
+        labeled: list[str] = []
+        for img_path in sorted(
+            f for f in glob.glob(f"{project_root}/*.*")
+            if f.lower().endswith((".png", ".jpg", ".jpeg"))
+        ):
+            base = os.path.splitext(os.path.basename(img_path))[0]
+            lbl_path = f"{project_root}/labels/train/{base}.txt"
+            if os.path.isfile(lbl_path) and os.path.getsize(lbl_path) > 0:
+                labeled.append(img_path)
+        return labeled
+
+    def _write_training_dataset_files(
+        self,
+        out_dir: str,
+        train_images: list[str],
+        val_images: list[str],
+        train_split: str,
+        val_split: str,
+        range_start: int,
+        range_end: int,
+    ) -> str:
+        out_dir = out_dir.replace("\\", "/")
+        train_txt = f"{out_dir}/train_images.txt"
+        val_txt = f"{out_dir}/val_images.txt"
+        dataset_yaml = f"{out_dir}/dataset.yaml"
+        manifest_json = f"{out_dir}/training_manifest.json"
+
+        atomic_write_text(train_txt, "".join(f"{p.replace('\\', '/')}\n" for p in train_images))
+        atomic_write_text(val_txt, "".join(f"{p.replace('\\', '/')}\n" for p in val_images))
+
+        yaml_lines = [
+            f"train: {train_txt}",
+            f"val: {val_txt}",
+            f"nc: {len(self.class_names)}",
+            "names:",
+        ]
+        for idx, cls_name in enumerate(self.class_names):
+            safe_name = cls_name.replace("\"", "\\\"")
+            yaml_lines.append(f"  {idx}: \"{safe_name}\"")
+        atomic_write_text(dataset_yaml, "\n".join(yaml_lines) + "\n")
+
+        atomic_write_json(
+            manifest_json,
+            {
+                "project_root": self.project_root,
+                "train_split": train_split,
+                "val_split": val_split,
+                "range_start_1based": range_start,
+                "range_end_1based": range_end,
+                "train_count": len(train_images),
+                "val_count": len(val_images),
+            },
+        )
+        return dataset_yaml
+
+    def _append_training_log(self, line: str) -> None:
+        if hasattr(self, "txt_train_log"):
+            self.txt_train_log.insert("end", line.rstrip() + "\n")
+            self.txt_train_log.see("end")
+
+    def _set_training_status(self, running: bool) -> None:
+        if not hasattr(self, "lbl_train_status"):
+            return
+        status_text = LANG_MAP[self.lang].get("train_running", "Running") if running else LANG_MAP[self.lang].get("train_idle", "Idle")
+        self.lbl_train_status.config(
+            text=f"{LANG_MAP[self.lang].get('train_status', 'Status')}: {status_text}"
+        )
+
+    def _set_training_progress(self, current_epoch: int, total_epochs: int) -> None:
+        self.training_current_epoch = current_epoch
+        self.training_total_epochs = total_epochs
+        if hasattr(self, "lbl_train_progress"):
+            self.lbl_train_progress.config(
+                text=f"{LANG_MAP[self.lang].get('train_progress', 'Progress')}: {current_epoch}/{total_epochs}"
+            )
+
+    def _format_eta_seconds(self, seconds_left: float) -> str:
+        seconds = max(0, int(seconds_left))
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        return f"{minutes:02d}:{secs:02d}"
+
+    def _set_training_eta(self, eta_text: str) -> None:
+        if hasattr(self, "lbl_train_eta"):
+            self.lbl_train_eta.config(text=f"{LANG_MAP[self.lang].get('train_eta', 'ETA')}: {eta_text}")
+
+    def _handle_training_output_line(self, line: str) -> None:
+        self.training_queue.put(("log", line))
+        if self.training_total_epochs <= 0:
+            return
+        match = re.search(r"(^|\s)(\d{1,4})/(\d{1,4})(\s|$)", line)
+        if not match:
+            return
+        current = int(match.group(2))
+        total = int(match.group(3))
+        if total != self.training_total_epochs or current <= 0:
+            return
+        if self.training_start_time is not None:
+            elapsed = max(1.0, time.time() - self.training_start_time)
+            eta = (elapsed / current) * max(0, total - current)
+            self.training_queue.put(("progress", current, total, self._format_eta_seconds(eta)))
+        else:
+            self.training_queue.put(("progress", current, total, "-"))
+
+    def _run_training_subprocess(self, cmd: list[str], workdir: str) -> None:
+        try:
+            self.training_process = subprocess.Popen(
+                cmd,
+                cwd=workdir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+            if self.training_process.stdout is not None:
+                for line in self.training_process.stdout:
+                    self._handle_training_output_line(line)
+            rc = self.training_process.wait()
+            if rc == 0:
+                self.training_queue.put(("done",))
+            else:
+                self.training_queue.put(("error", f"Process exited with code {rc}"))
+        except Exception as exc:
+            self.training_queue.put(("error", str(exc)))
+        finally:
+            self.training_process = None
+
+    def _poll_training_queue(self) -> None:
+        keep_polling = self.training_running or not self.training_queue.empty()
+        while not self.training_queue.empty():
+            event = self.training_queue.get_nowait()
+            kind = event[0]
+            if kind == "log":
+                self._append_training_log(event[1])
+            elif kind == "progress":
+                current, total, eta_text = event[1], event[2], event[3]
+                self._set_training_progress(current, total)
+                self._set_training_eta(eta_text)
+            elif kind == "done":
+                self.training_running = False
+                self._set_training_status(False)
+                self._set_training_eta("00:00")
+                if self.training_thread is not None:
+                    self.training_thread = None
+                output_path = getattr(self, "_last_training_output_path", "")
+                messagebox.showinfo(
+                    LANG_MAP[self.lang]["title"],
+                    LANG_MAP[self.lang].get("train_done", "Training finished.\nOutput: {path}").format(path=output_path),
+                    parent=self.root,
+                )
+            elif kind == "error":
+                self.training_running = False
+                self._set_training_status(False)
+                if self.training_thread is not None:
+                    self.training_thread = None
+                err = event[1]
+                self.logger.error("Training process failed: %s", err)
+                messagebox.showerror(
+                    LANG_MAP[self.lang]["title"],
+                    LANG_MAP[self.lang].get("train_failed", "Training failed: {err}").format(err=err),
+                    parent=self.root,
+                )
+        if keep_polling:
+            self.root.after(200, self._poll_training_queue)
+
+    def _resolve_yolo_cli(self) -> str:
+        py_dir = os.path.dirname(sys.executable)
+        candidates = [
+            os.path.join(py_dir, "Scripts", "yolo.exe"),
+            os.path.join(py_dir, "Scripts", "yolo"),
+            os.path.join(py_dir, "yolo.exe"),
+            os.path.join(py_dir, "yolo"),
+        ]
+        for candidate in candidates:
+            if os.path.isfile(candidate):
+                return candidate
+        found = shutil.which("yolo")
+        if found:
+            return found
+        raise FileNotFoundError("YOLO CLI not found. Please ensure ultralytics is installed in this Python environment.")
+
+    def start_training_from_labels(self) -> None:
+        if not HAS_YOLO:
+            messagebox.showwarning("YOLO Not Available", "Please install ultralytics first.")
+            return
+        if self.training_running:
+            messagebox.showinfo(
+                LANG_MAP[self.lang]["title"],
+                LANG_MAP[self.lang].get("train_already_running", "Training is already running."),
+                parent=self.root,
+            )
+            return
+        if not self.project_root:
+            messagebox.showwarning(
+                LANG_MAP[self.lang]["title"],
+                LANG_MAP[self.lang].get("train_no_project", "No dataset loaded."),
+                parent=self.root,
+            )
+            return
+        if self.image_files and self.img_pil:
+            self.save_current()
+
+        split_roots = [s for s in ("train", "val", "test") if os.path.isdir(f"{self.project_root}/images/{s}")]
+        if split_roots:
+            train_split = self.current_split if self.current_split in split_roots else split_roots[0]
+            train_candidates = self._list_split_labeled_images_for_root(self.project_root, train_split)
+            if not train_candidates:
+                messagebox.showwarning(
+                    LANG_MAP[self.lang]["title"],
+                    LANG_MAP[self.lang].get("train_no_labels", "No labeled images found for training."),
+                    parent=self.root,
+                )
+                return
+            val_split = "val" if "val" in split_roots else train_split
+            val_candidates = self._list_split_labeled_images_for_root(self.project_root, val_split)
+        else:
+            train_split = "train"
+            val_split = "train"
+            train_candidates = self._list_flat_labeled_images_for_root(self.project_root)
+            val_candidates = []
+            if not train_candidates:
+                messagebox.showwarning(
+                    LANG_MAP[self.lang]["title"],
+                    LANG_MAP[self.lang].get("train_no_labels", "No labeled images found for training."),
+                    parent=self.root,
+                )
+                return
+
+        max_idx = len(train_candidates)
+        start_idx = simpledialog.askinteger(
+            LANG_MAP[self.lang].get("train_from_labels", "Train From Labels"),
+            f"{LANG_MAP[self.lang].get('train_range_start', 'Start Index (1-based)')}\n1 - {max_idx}",
+            parent=self.root,
+            minvalue=1,
+            maxvalue=max_idx,
+            initialvalue=1,
+        )
+        if start_idx is None:
+            return
+        end_idx = simpledialog.askinteger(
+            LANG_MAP[self.lang].get("train_from_labels", "Train From Labels"),
+            f"{LANG_MAP[self.lang].get('train_range_end', 'End Index (1-based)')}\n{start_idx} - {max_idx}",
+            parent=self.root,
+            minvalue=start_idx,
+            maxvalue=max_idx,
+            initialvalue=max_idx,
+        )
+        if end_idx is None:
+            return
+        if start_idx > end_idx:
+            messagebox.showwarning(
+                LANG_MAP[self.lang]["title"],
+                LANG_MAP[self.lang].get("train_bad_range", "Invalid range. Please input valid start/end index."),
+                parent=self.root,
+            )
+            return
+
+        epochs = simpledialog.askinteger(
+            LANG_MAP[self.lang].get("train_from_labels", "Train From Labels"),
+            LANG_MAP[self.lang].get("train_epochs", "Epochs"),
+            parent=self.root,
+            minvalue=1,
+            maxvalue=1000,
+            initialvalue=50,
+        )
+        if epochs is None:
+            return
+        imgsz = simpledialog.askinteger(
+            LANG_MAP[self.lang].get("train_from_labels", "Train From Labels"),
+            LANG_MAP[self.lang].get("train_imgsz", "Image Size"),
+            parent=self.root,
+            minvalue=64,
+            maxvalue=4096,
+            initialvalue=640,
+        )
+        if imgsz is None:
+            return
+
+        out_dir = filedialog.askdirectory(
+            parent=self.root,
+            title=LANG_MAP[self.lang].get("select_train_output", "Select Training Output Folder"),
+        )
+        if not out_dir:
+            return
+        out_dir = out_dir.replace("\\", "/")
+
+        selected_train = train_candidates[start_idx - 1:end_idx]
+        if not selected_train:
+            messagebox.showwarning(
+                LANG_MAP[self.lang]["title"],
+                LANG_MAP[self.lang].get("train_no_labels", "No labeled images found for training."),
+                parent=self.root,
+            )
+            return
+        if val_candidates:
+            selected_val = val_candidates
+        else:
+            val_count = max(1, int(len(selected_train) * 0.2))
+            if len(selected_train) <= 1:
+                selected_val = selected_train[:]
+            else:
+                selected_val = selected_train[-val_count:]
+                selected_train = selected_train[:-val_count]
+                if not selected_train:
+                    selected_train = selected_val[:]
+
+        try:
+            mode = self.det_model_mode.get()
+            if mode == "Official YOLO26m.pt (Bundled)":
+                model_path = self._resolve_official_model_path()
+            else:
+                model_path = self.yolo_path.get().strip()
+            model_path = os.path.abspath(model_path)
+            if not os.path.isfile(model_path):
+                messagebox.showerror("Model Error", f"Model file not found:\n{model_path}", parent=self.root)
+                return
+
+            os.makedirs(out_dir, exist_ok=True)
+            dataset_yaml = self._write_training_dataset_files(
+                out_dir=out_dir,
+                train_images=selected_train,
+                val_images=selected_val,
+                train_split=train_split,
+                val_split=val_split,
+                range_start=start_idx,
+                range_end=end_idx,
+            )
+            run_name = f"train_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            yolo_cli = self._resolve_yolo_cli()
+            cmd = [
+                yolo_cli,
+                "train",
+                f"model={model_path}",
+                f"data={dataset_yaml}",
+                f"epochs={epochs}",
+                f"imgsz={imgsz}",
+                f"project={out_dir}",
+                f"name={run_name}",
+                "exist_ok=True",
+            ]
+            command_text = " ".join(f"\"{part}\"" if " " in part else part for part in cmd)
+            self.train_command_var.set(command_text)
+            self._append_training_log("=" * 60)
+            self._append_training_log(command_text)
+            self._append_training_log("=" * 60)
+            self._set_training_status(True)
+            self._set_training_progress(0, epochs)
+            self._set_training_eta("-")
+            self.training_running = True
+            self.training_start_time = time.time()
+            self.training_total_epochs = epochs
+            self.training_current_epoch = 0
+            self._last_training_output_path = f"{out_dir}/{run_name}"
+            self.training_thread = threading.Thread(
+                target=self._run_training_subprocess,
+                args=(cmd, self.project_root),
+                daemon=True,
+            )
+            self.training_thread.start()
+            self._poll_training_queue()
+        except Exception as exc:
+            self.logger.exception("Training from labels failed")
+            messagebox.showerror(
+                LANG_MAP[self.lang]["title"],
+                LANG_MAP[self.lang].get("train_failed", "Training failed: {err}").format(err=exc),
+                parent=self.root,
+            )
+
     def _iter_export_images(self) -> list[tuple[str, str, str]]:
         """Return (split, image_path, label_path) entries for full-dataset export."""
         entries: list[tuple[str, str, str]] = []
@@ -3205,11 +3896,15 @@ class UltimateLabeller:
     def undo(self) -> None:
         """Undo last edit."""
         if self.history_manager.undo():
+            if self.project_root and self.img_pil:
+                self.save_current()
             self.render()
     
     def redo(self) -> None:
         """??"""
         if self.history_manager.redo():
+            if self.project_root and self.img_pil:
+                self.save_current()
             self.render()
     
     def save_and_next(self):
