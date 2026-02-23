@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ultimate_ai_labeller"
-version = "0.1.9"
+version = "0.1.10"
 description = "AI Labelling tool for computer vision"
 readme = "README.md"
 authors = [{ name="James Chang", email="james2738999@gmail.com" }]

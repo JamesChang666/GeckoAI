@@ -3816,15 +3816,32 @@ class UltimateLabeller:
 
     def _export_all_yolo(self, out_dir: str) -> int:
         count = 0
-        for split, img_path, lbl_path in self._iter_export_images():
-            dst_img_dir = f"{out_dir}/images/{split}"
-            dst_lbl_dir = f"{out_dir}/labels/{split}"
-            os.makedirs(dst_img_dir, exist_ok=True)
-            os.makedirs(dst_lbl_dir, exist_ok=True)
+        dst_img_dir = f"{out_dir}/images/train"
+        dst_lbl_dir = f"{out_dir}/labels/train"
+        os.makedirs(dst_img_dir, exist_ok=True)
+        os.makedirs(dst_lbl_dir, exist_ok=True)
 
-            shutil.copy2(img_path, f"{dst_img_dir}/{os.path.basename(img_path)}")
+        def build_unique_stem(split: str, stem: str, ext: str) -> str:
+            candidate = stem
+            target_img = f"{dst_img_dir}/{candidate}{ext}"
+            if not os.path.exists(target_img):
+                return candidate
+            candidate = f"{split}_{stem}"
+            target_img = f"{dst_img_dir}/{candidate}{ext}"
+            if not os.path.exists(target_img):
+                return candidate
+            i = 1
+            while os.path.exists(f"{dst_img_dir}/{candidate}_{i}{ext}"):
+                i += 1
+            return f"{candidate}_{i}"
+
+        for split, img_path, lbl_path in self._iter_export_images():
+            img_name = os.path.basename(img_path)
+            stem, ext = os.path.splitext(img_name)
+            target_stem = build_unique_stem(split, stem, ext)
+            shutil.copy2(img_path, f"{dst_img_dir}/{target_stem}{ext}")
             if os.path.isfile(lbl_path):
-                shutil.copy2(lbl_path, f"{dst_lbl_dir}/{os.path.basename(lbl_path)}")
+                shutil.copy2(lbl_path, f"{dst_lbl_dir}/{target_stem}.txt")
             count += 1
         return count
 

@@ -35,7 +35,7 @@ Desktop image annotation tool for object detection datasets (Tkinter + Ultralyti
 - Session resume (last project/split/image/model settings)
 - English/Chinese UI switch and light/dark theme
 - Export all annotations by format:
-  - `YOLO (.txt)` full dataset export
+  - `YOLO (.txt)` export to `images/train` + `labels/train` structure
   - `JSON` full dataset export (per-image annotation json)
 
 ## Repositories
@@ -82,7 +82,7 @@ pip install ultimate_ai_labeller
 From local wheel:
 
 ```bash
-pip install dist/ultimate_ai_labeller-0.1.9-py3-none-any.whl
+pip install dist/ultimate_ai_labeller-0.1.10-py3-none-any.whl
 ```
 
 From source:
