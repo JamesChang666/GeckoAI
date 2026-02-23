@@ -1632,8 +1632,11 @@ class UltimateLabeller:
             f"split: {q(self.current_split)}",
             f"image_name: {q(image_name)}",
             f"image_index: {image_index}",
+            f"class_count: {len(self.class_names)}",
             f"updated_at: {q(datetime.datetime.now().isoformat(timespec='seconds'))}",
         ]
+        for idx, class_name in enumerate(self.class_names):
+            lines.append(f"class_{idx}: {q(class_name)}")
         try:
             atomic_write_text(yaml_path, "\n".join(lines) + "\n")
         except Exception:
@@ -1660,6 +1663,23 @@ class UltimateLabeller:
             self.logger.exception("Failed to read project progress yaml: %s", yaml_path)
             return {}
         return data
+
+    def _extract_class_names_from_progress(self, progress: dict[str, str]) -> list[str]:
+        count_raw = progress.get("class_count", "")
+        try:
+            class_count = int(count_raw)
+        except ValueError:
+            class_count = 0
+        if class_count <= 0:
+            return []
+        names: list[str] = []
+        for idx in range(class_count):
+            key = f"class_{idx}"
+            name = progress.get(key, "").strip()
+            if not name:
+                return []
+            names.append(name)
+        return names
 
     def save_session_state(self) -> None:
         state = SessionState(
@@ -3102,10 +3122,18 @@ class UltimateLabeller:
         self.project_root = directory.replace('\\', '/')
         self.ensure_yolo_label_dirs(self.project_root)
 
+        progress = self._read_project_progress_yaml(self.project_root)
+        progress_split = progress.get("split", "")
+        progress_image = progress.get("image_name", "")
+        progress_class_names = self._extract_class_names_from_progress(progress)
+
+        # Always restore class names from project yaml when available.
+        if progress_class_names:
+            self.class_names[:] = progress_class_names
+            self._refresh_class_dropdown()
+
+        # For split/image resume, explicit session choice still has priority.
         if not preferred_image:
-            progress = self._read_project_progress_yaml(self.project_root)
-            progress_split = progress.get("split", "")
-            progress_image = progress.get("image_name", "")
             if progress_split in {"train", "val", "test"}:
                 self.current_split = progress_split
             if progress_image:

@@ -82,7 +82,7 @@ pip install ultimate_ai_labeller
 From local wheel:
 
 ```bash
-pip install dist/ultimate_ai_labeller-0.1.8-py3-none-any.whl
+pip install dist/ultimate_ai_labeller-0.1.9-py3-none-any.whl
 ```
 
 From source:
@@ -139,4 +139,4 @@ uvicorn app:app --host 127.0.0.1 --port 8000 --reload
 - If the official model file is unavailable locally, import a custom `.pt/.onnx` model from the UI.
 - To use your own Tk app icon, put `app_icon.png` in `src/ai_labeller/assets/`.
 - Session file: `~/.ai_labeller_session.json`.
-- Project progress YAML: `<project_root>/.ai_labeller_progress.yaml` (resume split/image after reopen).
+- Project progress YAML: `<project_root>/.ai_labeller_progress.yaml` (resume split/image and class names after reopen).
