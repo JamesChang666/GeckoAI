@@ -130,101 +130,101 @@ THEMES = {
 # ==================== Language ====================
 LANG_MAP = {
     "zh": {
-        "title": "AI Labeller Pro",
-        "load_proj": "[ZH] Load Project",
-        "undo": "[ZH] Undo",
-        "redo": "[ZH] Redo",
-        "autolabel": "[ZH] Red Detection",
-        "fuse": "[ZH] Fuse Boxes",
-        "file_info": "[ZH] File Info",
-        "no_img": "[ZH] No Image",
-        "filename": "[ZH] File",
-        "progress": "[ZH] Progress",
-        "boxes": "[ZH] Boxes",
-        "class_mgmt": "[ZH] Classes",
-        "current_class": "[ZH] Current Class",
-        "edit_classes": "[ZH] Edit Classes",
-        "reassign_class": "[ZH] Reassign Selected Class",
-        "clear_labels": "[ZH] Delete All Labels",
-        "add": "[ZH] Add",
-        "rename": "[ZH] Rename",
-        "apply": "[ZH] Apply",
-        "delete_class": "[ZH] Delete Class",
-        "delete_class_confirm": "[ZH] Delete class '{name}' (ID {idx})?\nLabels with this class in current image will be reassigned.",
-        "delete_class_last": "[ZH] Cannot delete the last class.",
-        "class_name": "[ZH] Class Name",
-        "rename_prompt": "[ZH] Modify '{name}':",
-        "add_prompt": "[ZH] Class name:",
-        "current": "[ZH] Current",
-        "to": "[ZH] To",
-        "no_label_selected": "[ZH] No label selected.",
-        "no_classes_available": "[ZH] No classes available.",
-        "theme_light": "[ZH] Light Mode",
-        "theme_dark": "[ZH] Dark Mode",
-        "export_format": "[ZH] Export All As",
-        "ai_tools": "[ZH] AI Tools",
-        "auto_detect": "[ZH] Auto Detect",
-        "learning": "[ZH] Learning",
-        "foundation_mode": "[ZH] Foundation Assist",
-        "propagate": "[ZH] Propagate",
-        "run_detection": "[ZH] Run Detection",
-        "train_from_labels": "以現有標註開始訓練",
-        "detection_model": "[ZH] Detection Model",
-        "browse_model": "[ZH] Browse Model",
-        "train_range_start": "起始索引（從 1 開始）",
-        "train_range_end": "結束索引（從 1 開始）",
-        "train_epochs": "訓練回合數（Epochs）",
-        "train_imgsz": "訓練影像尺寸",
-        "select_train_output": "選擇訓練輸出資料夾",
-        "train_no_project": "尚未載入資料集。",
-        "train_no_labels": "找不到可用於訓練的已標註影像。",
-        "train_bad_range": "區間無效，請輸入正確的起始與結束索引。",
-        "train_done": "訓練完成。\n輸出位置：{path}",
-        "train_failed": "訓練失敗：{err}",
-        "train_monitor": "訓練監控",
-        "train_status": "狀態",
-        "train_progress": "進度",
-        "train_eta": "預估剩餘時間",
-        "train_idle": "閒置",
-        "train_running": "訓練中",
-        "train_command": "命令",
-        "train_already_running": "目前已有訓練在執行中。",
-        "use_official_yolo26n": "[ZH] Use Official yolo26m.pt",
-        "export": "[ZH] Export All",
-        "prev": "[ZH] Previous",
-        "next": "[ZH] Next",
-        "shortcuts": "[ZH] Shortcuts",
-        "shortcut_help": "[ZH] Shortcut Help",
-        "dataset": "[ZH] Dataset",
-        "lang_switch": "EN",
-        "delete": "[ZH] Delete Selected",
-        "remove_from_split": "[ZH] Remove From Split",
-        "remove_confirm": "[ZH] Remove current image from {split}?",
-        "remove_done": "[ZH] Removed: {name}",
-        "remove_none": "[ZH] No image to remove.",
-        "restore_from_split": "[ZH] Restore Deleted Frame",
-        "restore_none": "[ZH] No removed frame found in this split.",
-        "restore_title": "[ZH] Restore Deleted Frame",
-        "restore_select": "[ZH] Select a frame to restore:",
-        "restore_done": "[ZH] Restored: {name}",
-        "select_image": "[ZH] Select Image",
-        "startup_choose_source": "[ZH] Choose Startup Source",
-        "startup_prompt": "[ZH] How do you want to start?",
-        "startup_images": "[ZH] Open Images Folder",
-        "startup_yolo": "[ZH] Open YOLO Dataset",
-        "startup_rfdetr": "[ZH] Open RF-DETR Dataset",
-        "startup_skip": "[ZH] Later",
-        "back_to_source": "[ZH] Back to Source Select",
-        "startup_model_cancel_title": "[ZH] Model Selection Cancelled",
-        "startup_model_cancel_msg": "[ZH] No model selected. Continue with images folder only?",
-        "pick_folder_title": "[ZH] Select Folder",
-        "loaded_from": "[ZH] Loaded {count} images\nFrom: {path}\nSplit: {split}",
-        "no_supported_images": "[ZH] No supported images found (png/jpg/jpeg)\nFolder: {path}",
-        "select_export_folder": "[ZH] Select Export Folder",
-        "export_no_project": "[ZH] No dataset loaded.",
-        "export_done": "[ZH] Export completed: {count} images\nOutput: {path}",
-        "export_failed": "[ZH] Export failed: {err}",
-    },
+    "title": "AI 標註專業版",
+    "load_proj": "載入專案",
+    "undo": "復原",
+    "redo": "重做",
+    "autolabel": "紅色檢測",
+    "fuse": "合併框",
+    "file_info": "檔案資訊",
+    "no_img": "沒有影像",
+    "filename": "檔案",
+    "progress": "進度",
+    "boxes": "框",
+    "class_mgmt": "類別管理",
+    "current_class": "目前類別",
+    "edit_classes": "編輯類別",
+    "reassign_class": "重新指定所選類別",
+    "clear_labels": "刪除所有標註",
+    "add": "新增",
+    "rename": "重新命名",
+    "apply": "套用",
+    "delete_class": "刪除類別",
+    "delete_class_confirm": "刪除類別 '{name}' (ID {idx})？\n目前影像中此類別的標註將被重新指定。",
+    "delete_class_last": "無法刪除最後一個類別。",
+    "class_name": "類別名稱",
+    "rename_prompt": "修改 '{name}':",
+    "add_prompt": "類別名稱：",
+    "current": "目前",
+    "to": "至",
+    "no_label_selected": "未選取任何標註。",
+    "no_classes_available": "沒有可用的類別。",
+    "theme_light": "淺色模式",
+    "theme_dark": "深色模式",
+    "export_format": "全部匯出為",
+    "ai_tools": "AI 工具",
+    "auto_detect": "自動檢測",
+    "learning": "學習",
+    "foundation_mode": "基礎輔助",
+    "propagate": "傳播",
+    "run_detection": "執行檢測",
+    "train_from_labels": "以現有標註開始訓練",
+    "detection_model": "檢測模型",
+    "browse_model": "瀏覽模型",
+    "train_range_start": "起始索引（從 1 開始）",
+    "train_range_end": "結束索引（從 1 開始）",
+    "train_epochs": "訓練回合數（Epochs）",
+    "train_imgsz": "訓練影像尺寸",
+    "select_train_output": "選擇訓練輸出資料夾",
+    "train_no_project": "尚未載入資料集。",
+    "train_no_labels": "找不到可用於訓練的已標註影像。",
+    "train_bad_range": "區間無效，請輸入正確的起始與結束索引。",
+    "train_done": "訓練完成。\n輸出位置：{path}",
+    "train_failed": "訓練失敗：{err}",
+    "train_monitor": "訓練監控",
+    "train_status": "狀態",
+    "train_progress": "進度",
+    "train_eta": "預估剩餘時間",
+    "train_idle": "閒置",
+    "train_running": "訓練中",
+    "train_command": "命令",
+    "train_already_running": "目前已有訓練在執行中。",
+    "use_official_yolo26n": "使用官方 yolo26m.pt",
+    "export": "全部匯出",
+    "prev": "上一個",
+    "next": "下一個",
+    "shortcuts": "快捷鍵",
+    "shortcut_help": "快捷鍵說明",
+    "dataset": "資料集",
+    "lang_switch": "EN",
+    "delete": "刪除所選",
+    "remove_from_split": "從分割中移除",
+    "remove_confirm": "要將目前影像從 {split} 移除嗎？",
+    "remove_done": "已移除：{name}",
+    "remove_none": "沒有可移除的影像。",
+    "restore_from_split": "恢復已刪除影格",
+    "restore_none": "此分割中沒有找到已刪除的影格。",
+    "restore_title": "恢復已刪除影格",
+    "restore_select": "選擇要恢復的影格：",
+    "restore_done": "已恢復：{name}",
+    "select_image": "選擇影像",
+    "startup_choose_source": "選擇啟動來源",
+    "startup_prompt": "您要如何開始？",
+    "startup_images": "開啟影像資料夾",
+    "startup_yolo": "開啟 YOLO 資料集",
+    "startup_rfdetr": "開啟 RF-DETR 資料集",
+    "startup_skip": "稍後",
+    "back_to_source": "返回來源選擇",
+    "startup_model_cancel_title": "模型選擇已取消",
+    "startup_model_cancel_msg": "未選擇模型。僅繼續使用影像資料夾？",
+    "pick_folder_title": "選擇資料夾",
+    "loaded_from": "已載入 {count} 張影像\n來源：{path}\n分割：{split}",
+    "no_supported_images": "未找到支援的影像 (png/jpg/jpeg)\n資料夾：{path}",
+    "select_export_folder": "選擇匯出資料夾",
+    "export_no_project": "尚未載入資料集。",
+    "export_done": "匯出完成：{count} 張影像\n輸出：{path}",
+    "export_failed": "匯出失敗：{err}"
+},
     "en": {
         "title": "AI Labeller Pro",
         "load_proj": "Load Project",
@@ -351,7 +351,7 @@ class UltimateLabeller:
         self.current_split = self.state.current_split
         self.image_files = self.state.image_files
         self.current_idx = self.state.current_idx
-        self.rects = self.state.rects  # [x1, y1, x2, y2, cid]
+        self.rects = self.state.rects  # [x1, y1, x2, y2, cid, angle_deg?]
         self.class_names = self.state.class_names
         self.learning_mem = deque(maxlen=self.config.max_learning_memory)
         
@@ -364,6 +364,8 @@ class UltimateLabeller:
         self.selected_idx = None
         self.selected_indices: set[int] = set()
         self.active_handle = None
+        self.active_rotate_handle = False
+        self.rotate_drag_offset_deg = 0.0
         self.is_moving_box = False
         self.drag_start = None
         self.temp_rect_coords = None
@@ -380,6 +382,7 @@ class UltimateLabeller:
         self.yolo_path = tk.StringVar(value=self.config.yolo_model_path)
         self.det_model_mode = tk.StringVar(value="Official YOLO26m.pt (Bundled)")
         self._loaded_model_key: tuple[str, str] | None = None
+        self._force_cpu_detection = False
         self.model_library: list[str] = [self.config.yolo_model_path]
         self.var_export_format = tk.StringVar(value="YOLO (.txt)")
         self.var_auto_yolo = tk.BooleanVar(value=False)
@@ -541,11 +544,11 @@ class UltimateLabeller:
     def _pick_box_at_point(self, ix: float, iy: float) -> int | None:
         candidates: list[tuple[float, int]] = []
         for idx, rect in enumerate(self.rects):
-            x1 = min(rect[0], rect[2])
-            y1 = min(rect[1], rect[3])
-            x2 = max(rect[0], rect[2])
-            y2 = max(rect[1], rect[3])
-            if x1 < ix < x2 and y1 < iy < y2:
+            if self._point_in_rotated_box(ix, iy, rect):
+                x1 = min(rect[0], rect[2])
+                y1 = min(rect[1], rect[3])
+                x2 = max(rect[0], rect[2])
+                y2 = max(rect[1], rect[3])
                 area = max(1.0, (x2 - x1) * (y2 - y1))
                 candidates.append((area, idx))
         if not candidates:
@@ -756,6 +759,7 @@ class UltimateLabeller:
             ("F", LANG_MAP[self.lang]["next"]),
             ("D", LANG_MAP[self.lang]["prev"]),
             ("A", LANG_MAP[self.lang]["autolabel"]),
+            ("Q / E", "Rotate selected box"),
             ("Ctrl+Z", LANG_MAP[self.lang]["undo"]),
             ("Ctrl+Y", LANG_MAP[self.lang]["redo"]),
             ("Del", LANG_MAP[self.lang]["delete"]),
@@ -1357,6 +1361,7 @@ class UltimateLabeller:
             ("F", LANG_MAP[self.lang]["next"]),
             ("D", LANG_MAP[self.lang]["prev"]),
             ("A", LANG_MAP[self.lang]["autolabel"]),
+            ("Q / E", "Rotate selected box"),
             ("Ctrl+Z", LANG_MAP[self.lang]["undo"]),
             ("Ctrl+Y", LANG_MAP[self.lang]["redo"]),
             ("Del", LANG_MAP[self.lang]["delete"])
@@ -1768,6 +1773,62 @@ class UltimateLabeller:
             "Please reinstall package or choose a custom model."
         )
 
+    def _resolve_custom_model_path(self, raw_path: str) -> str:
+        path = (raw_path or "").strip().strip('"').strip("'")
+        if not path:
+            raise FileNotFoundError("Model file not found: empty path")
+
+        normalized = os.path.abspath(os.path.expanduser(path))
+        if os.path.isfile(normalized):
+            return normalized
+
+        candidates: list[str] = []
+        lower_norm = normalized.lower()
+
+        # If a run directory or weights directory is given, try common YOLO outputs.
+        if os.path.isdir(normalized):
+            candidates.extend(
+                [
+                    os.path.join(normalized, "weights", "best.pt"),
+                    os.path.join(normalized, "weights", "last.pt"),
+                    os.path.join(normalized, "best.pt"),
+                    os.path.join(normalized, "last.pt"),
+                ]
+            )
+        else:
+            # If user entered a non-existing file path, try sibling fallback.
+            parent = os.path.dirname(normalized)
+            name = os.path.basename(normalized).lower()
+            if name == "best.pt":
+                candidates.append(os.path.join(parent, "last.pt"))
+            elif name == "last.pt":
+                candidates.append(os.path.join(parent, "best.pt"))
+
+            # If path looks like a run folder string, infer weights files.
+            root, ext = os.path.splitext(normalized)
+            if not ext:
+                candidates.extend(
+                    [
+                        os.path.join(normalized, "weights", "best.pt"),
+                        os.path.join(normalized, "weights", "last.pt"),
+                        os.path.join(normalized, "best.pt"),
+                        os.path.join(normalized, "last.pt"),
+                    ]
+                )
+            if lower_norm.endswith(os.path.join("weights", "best.pt").lower()):
+                run_dir = os.path.dirname(os.path.dirname(normalized))
+                candidates.append(os.path.join(run_dir, "weights", "last.pt"))
+            if lower_norm.endswith(os.path.join("weights", "last.pt").lower()):
+                run_dir = os.path.dirname(os.path.dirname(normalized))
+                candidates.append(os.path.join(run_dir, "weights", "best.pt"))
+
+        for candidate in candidates:
+            if os.path.isfile(candidate):
+                self.logger.warning("Model path repaired: %s -> %s", normalized, candidate)
+                return os.path.abspath(candidate)
+
+        raise FileNotFoundError(f"Model file not found:\n{normalized}")
+
     def browse_detection_model(self) -> None:
         self.pick_model_file()
 
@@ -1912,10 +1973,14 @@ class UltimateLabeller:
                     self.root.after(120, lambda: self.show_startup_source_dialog(force=True, reason="model selection cancelled"))
                 return
             model_path = self.yolo_path.get().strip()
-            if not model_path or not os.path.isfile(model_path):
+            try:
+                model_path = self._resolve_custom_model_path(model_path)
+            except FileNotFoundError:
                 messagebox.showerror("Model Error", "Invalid model file selected. Please try again.")
                 self.root.after(120, lambda: self.show_startup_source_dialog(force=True, reason="invalid model path"))
                 return
+            self.yolo_path.set(model_path)
+            self._register_model_path(model_path)
             # Open on next idle tick + short delay to avoid native-dialog focus races on Windows.
             self.root.after_idle(lambda: self.root.after(180, self.startup_choose_images_folder))
         except Exception:
@@ -2229,17 +2294,35 @@ class UltimateLabeller:
         for i, rect in enumerate(self.rects):
             x1, y1 = self.img_to_canvas(rect[0], rect[1])
             x2, y2 = self.img_to_canvas(rect[2], rect[3])
+            corners = self.get_rotated_corners(rect)
+            canvas_points: list[float] = []
+            for px, py in corners:
+                cxp, cyp = self.img_to_canvas(px, py)
+                canvas_points.extend([cxp, cyp])
             
             is_selected = i in selected_set
             color = COLORS["box_selected"] if is_selected else box_colors[rect[4] % len(box_colors)]
             width = 3 if is_selected else 2
             
             # ???????????????
-            self.canvas.create_rectangle(
-                x1, y1, x2, y2,
+            self.canvas.create_polygon(
+                canvas_points,
                 outline=color,
-                width=width
+                width=width,
+                fill=""
             )
+
+            # Heading line helps visualizing orientation.
+            angle_deg = self.get_rect_angle_deg(rect)
+            if abs(angle_deg) > 1e-3:
+                cx_mid = (rect[0] + rect[2]) / 2
+                cy_mid = (rect[1] + rect[3]) / 2
+                xh = (rect[0] + rect[2]) / 2
+                yh = min(rect[1], rect[3])
+                pxh, pyh = self.rotate_point_around_center(xh, yh, cx_mid, cy_mid, angle_deg)
+                cxc, cyc = self.img_to_canvas(cx_mid, cy_mid)
+                cxx, cyy = self.img_to_canvas(pxh, pyh)
+                self.canvas.create_line(cxc, cyc, cxx, cyy, fill=color, width=2)
             
             # ????????????????????
             if is_selected and self.selected_idx == i and len(selected_set) == 1:
@@ -2254,6 +2337,20 @@ class UltimateLabeller:
                         outline=color,
                         width=2
                     )
+                top_x, top_y, rot_x, rot_y = self.get_rotation_handle_points(rect)
+                ctx, cty = self.img_to_canvas(top_x, top_y)
+                crx, cry = self.img_to_canvas(rot_x, rot_y)
+                self.canvas.create_line(ctx, cty, crx, cry, fill=color, width=2)
+                knob_r = self.HANDLE_SIZE + 1
+                self.canvas.create_oval(
+                    crx - knob_r,
+                    cry - knob_r,
+                    crx + knob_r,
+                    cry + knob_r,
+                    fill=color,
+                    outline=COLORS["bg_white"],
+                    width=2,
+                )
             
             if self.show_all_labels:
                 # ?????????????????
@@ -2262,13 +2359,17 @@ class UltimateLabeller:
                     if rect[4] < len(self.class_names)
                     else f"ID:{rect[4]}"
                 )
+                if abs(angle_deg) > 1e-3:
+                    class_name = f"{class_name} ({angle_deg:.1f}°)"
                 
                 # Draw a new box???????????????????????
-                label_y = max(y1 - 24, 8)  # Draw a new box???????
+                min_canvas_y = min(canvas_points[1::2]) if canvas_points else y1
+                min_canvas_x = min(canvas_points[0::2]) if canvas_points else x1
+                label_y = max(min_canvas_y - 24, 8)  # Draw a new box???????
                 
                 # ???????????
                 text_id = self.canvas.create_text(
-                    x1 + 8,
+                    min_canvas_x + 8,
                     label_y + 4,
                     text=class_name,
                     fill=COLORS["text_white"],
@@ -2380,10 +2481,24 @@ class UltimateLabeller:
         
         ix, iy = self.canvas_to_img(e.x, e.y)
         is_additive_select = bool(e.state & 0x0001) or bool(e.state & 0x0004)
+        self.active_rotate_handle = False
+        self.active_handle = None
         
         # Check if one of the resize handles is selected
         if self.selected_idx is not None and len(self._get_selected_indices()) == 1 and not is_additive_select:
-            for i, (hx, hy) in enumerate(self.get_handles(self.rects[self.selected_idx])):
+            active_rect = self.rects[self.selected_idx]
+            _, _, rhx, rhy = self.get_rotation_handle_points(active_rect)
+            rotate_dist = np.sqrt((ix - rhx) ** 2 + (iy - rhy) ** 2) * self.scale
+            if rotate_dist < (self.config.mouse_handle_hit_radius_px + 3):
+                cx = (active_rect[0] + active_rect[2]) / 2
+                cy = (active_rect[1] + active_rect[3]) / 2
+                pointer_deg = math.degrees(math.atan2(iy - cy, ix - cx))
+                self.rotate_drag_offset_deg = pointer_deg - self.get_rect_angle_deg(active_rect)
+                self.active_rotate_handle = True
+                self.drag_start = (ix, iy)
+                self.push_history()
+                return
+            for i, (hx, hy) in enumerate(self.get_handles(active_rect)):
                 dist = np.sqrt((ix - hx) ** 2 + (iy - hy) ** 2) * self.scale
                 if dist < self.config.mouse_handle_hit_radius_px:
                     self.active_handle = i
@@ -2434,17 +2549,27 @@ class UltimateLabeller:
         ix = max(0, min(W, ix))
         iy = max(0, min(H, iy))
         
-        if self.selected_idx is not None and self.active_handle is not None:
+        if self.selected_idx is not None and self.active_rotate_handle:
+            rect = self.rects[self.selected_idx]
+            cx = (rect[0] + rect[2]) / 2
+            cy = (rect[1] + rect[3]) / 2
+            pointer_deg = math.degrees(math.atan2(iy - cy, ix - cx))
+            self.set_rect_angle_deg(rect, pointer_deg - self.rotate_drag_offset_deg)
+        elif self.selected_idx is not None and self.active_handle is not None:
             # ???????????
             rect = self.rects[self.selected_idx]
+            cx = (rect[0] + rect[2]) / 2
+            cy = (rect[1] + rect[3]) / 2
+            angle_deg = self.get_rect_angle_deg(rect)
+            lx, ly = self.rotate_point_around_center(ix, iy, cx, cy, -angle_deg)
             if self.active_handle in [0, 6, 7]:
-                rect[0] = ix
+                rect[0] = lx
             if self.active_handle in [0, 1, 2]:
-                rect[1] = iy
+                rect[1] = ly
             if self.active_handle in [2, 3, 4]:
-                rect[2] = ix
+                rect[2] = lx
             if self.active_handle in [4, 5, 6]:
-                rect[3] = iy
+                rect[3] = ly
         
         elif self.is_moving_box:
             # Move selected box
@@ -2504,6 +2629,8 @@ class UltimateLabeller:
         
         self.is_moving_box = False
         self.active_handle = None
+        self.active_rotate_handle = False
+        self.rotate_drag_offset_deg = 0.0
         self.render()
     
     def on_zoom(self, e):
@@ -2531,6 +2658,16 @@ class UltimateLabeller:
             for idx in selected:
                 self.rects[idx][4] = new_cid
             self.render()
+
+    def rotate_selected_boxes(self, delta_deg: float) -> None:
+        selected = self._get_selected_indices()
+        if not selected:
+            return
+        self.push_history()
+        for idx in selected:
+            rect = self.rects[idx]
+            self.set_rect_angle_deg(rect, self.get_rect_angle_deg(rect) + delta_deg)
+        self.render()
     
     def edit_classes_table(self):
         """??????????????"""
@@ -2836,6 +2973,11 @@ class UltimateLabeller:
                 if os.path.exists(label_path):
                     moved_label_path = self._build_removed_path("labels", label_path)
                     shutil.move(label_path, moved_label_path)
+                    if ext == ".txt":
+                        rot_path = self._rotation_meta_path_for_label(label_path)
+                        if os.path.exists(rot_path):
+                            moved_rot_path = self._build_removed_path("labels", rot_path)
+                            shutil.move(rot_path, moved_rot_path)
         except Exception as e:
             messagebox.showerror("Error", str(e))
             return
@@ -2854,6 +2996,8 @@ class UltimateLabeller:
             self.selected_idx = None
             self.selected_indices = set()
             self.active_handle = None
+            self.active_rotate_handle = False
+            self.rotate_drag_offset_deg = 0.0
             self.is_moving_box = False
             self.drag_start = None
             self.temp_rect_coords = None
@@ -2959,6 +3103,12 @@ class UltimateLabeller:
                         os.path.join(split_lbl_dir, f"{base}{ext}")
                     )
                     shutil.move(removed_lbl_path, target_lbl_path)
+                    if ext == ".txt":
+                        removed_rot_path = self._rotation_meta_path_for_label(removed_lbl_path)
+                        if os.path.exists(removed_rot_path):
+                            target_rot_path = self._rotation_meta_path_for_label(target_lbl_path)
+                            target_rot_path = self._unique_target_path(target_rot_path)
+                            shutil.move(removed_rot_path, target_rot_path)
         except Exception as e:
             messagebox.showerror("Error", str(e))
             return
@@ -2994,6 +3144,8 @@ class UltimateLabeller:
         self.selected_idx = None
         self.selected_indices = set()
         self.active_handle = None
+        self.active_rotate_handle = False
+        self.rotate_drag_offset_deg = 0.0
         self.is_moving_box = False
         self.drag_start = None
         self.temp_rect_coords = None
@@ -3001,23 +3153,33 @@ class UltimateLabeller:
         # ?????
         base = os.path.splitext(os.path.basename(path))[0]
         label_path = f"{self.project_root}/labels/{self.current_split}/{base}.txt"
+        rot_meta_path = self._rotation_meta_path_for_label(label_path)
         
         label_exists = os.path.exists(label_path) and os.path.getsize(label_path) > 0
         if label_exists:
             W, H = self.img_pil.width, self.img_pil.height
+            has_inline_angle = False
             try:
                 with open(label_path, 'r', encoding='utf-8') as f:
                     for line in f:
                         parts = line.split()
-                        if len(parts) == 5:
-                            c, cx, cy, w, h = map(float, parts)
+                        if len(parts) >= 5:
+                            c, cx, cy, w, h = map(float, parts[:5])
+                            angle_deg = float(parts[5]) if len(parts) >= 6 else 0.0
+                            has_inline_angle = has_inline_angle or len(parts) >= 6
                             self.rects.append([
                                 (cx - w / 2) * W,
                                 (cy - h / 2) * H,
                                 (cx + w / 2) * W,
                                 (cy + h / 2) * H,
-                                int(c)
+                                int(c),
+                                self.normalize_angle_deg(angle_deg),
                             ])
+                if self.rects and not has_inline_angle:
+                    loaded_angles = self._read_rotation_meta_angles(rot_meta_path)
+                    if loaded_angles and len(loaded_angles) == len(self.rects):
+                        for rect, angle in zip(self.rects, loaded_angles):
+                            self.set_rect_angle_deg(rect, angle)
             except Exception:
                 self.logger.exception("Failed to parse label file: %s", label_path)
                 messagebox.showerror("Error", f"Failed to read label file: {label_path}")
@@ -3041,23 +3203,35 @@ class UltimateLabeller:
         W, H = self.img_pil.width, self.img_pil.height
         
         label_path = f"{self.project_root}/labels/{self.current_split}/{base}.txt"
+        rot_meta_path = self._rotation_meta_path_for_label(label_path)
         
         lines = []
+        angles_deg = []
         for rect in self.rects:
             cx = (rect[0] + rect[2]) / 2 / W
             cy = (rect[1] + rect[3]) / 2 / H
             w = (rect[2] - rect[0]) / W
             h = (rect[3] - rect[1]) / H
             lines.append(f"{rect[4]} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
+            angles_deg.append(self.get_rect_angle_deg(rect))
         if not lines:
             if os.path.exists(label_path):
                 try:
                     os.remove(label_path)
                 except OSError:
                     self.logger.exception("Failed to remove empty label file: %s", label_path)
+            if os.path.exists(rot_meta_path):
+                try:
+                    os.remove(rot_meta_path)
+                except OSError:
+                    self.logger.exception("Failed to remove empty rotation meta file: %s", rot_meta_path)
             return
         try:
             atomic_write_text(label_path, "".join(lines))
+            if any(abs(a) > 1e-3 for a in angles_deg):
+                atomic_write_json(rot_meta_path, {"version": 1, "angles_deg": angles_deg})
+            elif os.path.exists(rot_meta_path):
+                os.remove(rot_meta_path)
         except Exception:
             self.logger.exception("Failed to save label file: %s", label_path)
             messagebox.showerror("Error", f"Failed to save label file:\n{label_path}")
@@ -3296,18 +3470,14 @@ class UltimateLabeller:
             if mode == "Official YOLO26m.pt (Bundled)":
                 model_path = self._resolve_official_model_path()
             else:
-                model_path = self.yolo_path.get().strip()
+                model_path = self._resolve_custom_model_path(self.yolo_path.get().strip())
 
             if not model_path:
                 messagebox.showwarning("Model", "Please choose a model file first.")
                 return
             model_path = os.path.abspath(model_path)
-            if not os.path.exists(model_path):
-                messagebox.showerror("Model Not Found", f"Model file not found:\n{model_path}")
-                return
-            if not os.path.isfile(model_path):
-                messagebox.showerror("Model Error", f"Path is not a file:\n{model_path}")
-                return
+            self.yolo_path.set(model_path)
+            self._register_model_path(model_path)
 
             loaded_key = (mode, model_path)
             if self.yolo_model is None or self._loaded_model_key != loaded_key:
@@ -3329,11 +3499,32 @@ class UltimateLabeller:
                     self.root.config(cursor="")
                     self.root.update_idletasks()
 
-            results = self.yolo_model(
-                self.img_pil,
-                conf=self.var_yolo_conf.get(),
-                verbose=False
-            )
+            preferred_device = "cpu"
+            if not self._force_cpu_detection and self._can_use_cuda_runtime():
+                preferred_device = 0
+
+            try:
+                results = self.yolo_model(
+                    self.img_pil,
+                    conf=self.var_yolo_conf.get(),
+                    verbose=False,
+                    device=preferred_device,
+                )
+            except RuntimeError as exc:
+                if preferred_device != "cpu" and self._is_cuda_kernel_compat_error(exc):
+                    self.logger.warning(
+                        "CUDA kernel compatibility error detected; retrying YOLO detection on CPU. error=%s",
+                        exc,
+                    )
+                    self._force_cpu_detection = True
+                    results = self.yolo_model(
+                        self.img_pil,
+                        conf=self.var_yolo_conf.get(),
+                        verbose=False,
+                        device="cpu",
+                    )
+                else:
+                    raise
             
             self.push_history()
             detection_count = 0
@@ -3368,6 +3559,33 @@ class UltimateLabeller:
         except Exception as exc:
             self.logger.exception("YOLO detection failed")
             messagebox.showerror("Detection Error", f"YOLO detection failed:\n{exc}")
+
+    def _is_cuda_kernel_compat_error(self, exc: BaseException) -> bool:
+        msg = str(exc).lower()
+        return (
+            "no kernel image is available for execution on the device" in msg
+            or "cudaerrornokernelimagefordevice" in msg
+        )
+
+    def _can_use_cuda_runtime(self) -> bool:
+        """Best-effort CUDA runtime compatibility check for current torch build."""
+        if "torch" not in globals():
+            return False
+        try:
+            if not torch.cuda.is_available():
+                return False
+            cap = torch.cuda.get_device_capability(0)
+            sm = f"sm_{cap[0]}{cap[1]}"
+            arch_list = []
+            if hasattr(torch.cuda, "get_arch_list"):
+                arch_list = list(torch.cuda.get_arch_list() or [])
+            if arch_list and sm not in arch_list:
+                return False
+            # Trigger a minimal CUDA op to fail fast on incompatible kernels.
+            _ = torch.zeros((1,), device="cuda")
+            return True
+        except Exception:
+            return False
 
     def _list_split_labeled_images_for_root(self, project_root: str, split: str) -> list[str]:
         labeled: list[str] = []
@@ -3565,6 +3783,86 @@ class UltimateLabeller:
             return found
         raise FileNotFoundError("YOLO CLI not found. Please ensure ultralytics is installed in this Python environment.")
 
+    def _prompt_training_weight_source(self) -> tuple[str, str | None] | None:
+        """Return ('official'|'custom'|'scratch', model_path_or_none). None means cancelled."""
+        result: dict[str, str | None] = {"choice": None, "path": None}
+        win = tk.Toplevel(self.root)
+        win.title("Training Weights")
+        win.geometry("440x210")
+        win.resizable(False, False)
+        win.configure(bg=COLORS["bg_light"])
+        win.transient(self.root)
+        win.grab_set()
+
+        tk.Label(
+            win,
+            text="Choose training weight source:",
+            font=self.font_bold,
+            fg=COLORS["text_primary"],
+            bg=COLORS["bg_light"],
+            anchor="w",
+        ).pack(fill="x", padx=18, pady=(18, 10))
+
+        def choose_official() -> None:
+            result["choice"] = "official"
+            win.destroy()
+
+        def choose_custom() -> None:
+            model_path = filedialog.askopenfilename(
+                parent=win,
+                title="Select custom weight",
+                filetypes=[
+                    ("Model files", "*.pt *.onnx"),
+                    ("PyTorch", "*.pt"),
+                    ("ONNX", "*.onnx"),
+                    ("All files", "*.*"),
+                ],
+            )
+            if not model_path:
+                return
+            try:
+                resolved = self._resolve_custom_model_path(model_path)
+            except FileNotFoundError as exc:
+                messagebox.showerror("Model Error", str(exc), parent=win)
+                return
+            result["choice"] = "custom"
+            result["path"] = os.path.abspath(resolved)
+            win.destroy()
+
+        def choose_scratch() -> None:
+            result["choice"] = "scratch"
+            win.destroy()
+
+        self.create_primary_button(
+            win,
+            text="Use Official yolo26m.pt",
+            command=choose_official,
+            bg=COLORS["primary"],
+        ).pack(fill="x", padx=18, pady=(0, 8))
+        self.create_primary_button(
+            win,
+            text="Choose Custom Weight",
+            command=choose_custom,
+            bg=COLORS["success"],
+        ).pack(fill="x", padx=18, pady=(0, 8))
+        self.create_secondary_button(
+            win,
+            text="From Scratch (skip pretrained weight)",
+            command=choose_scratch,
+        ).pack(fill="x", padx=18, pady=(0, 8))
+        self.create_secondary_button(
+            win,
+            text="Cancel",
+            command=win.destroy,
+        ).pack(fill="x", padx=18, pady=(0, 12))
+
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+        self.root.wait_window(win)
+        choice = result["choice"]
+        if not choice:
+            return None
+        return str(choice), result["path"]
+
     def start_training_from_labels(self) -> None:
         if not HAS_YOLO:
             messagebox.showwarning("YOLO Not Available", "Please install ultralytics first.")
@@ -3670,6 +3968,10 @@ class UltimateLabeller:
             return
         out_dir = out_dir.replace("\\", "/")
 
+        weight_choice = self._prompt_training_weight_source()
+        if weight_choice is None:
+            return
+
         selected_train = train_candidates[start_idx - 1:end_idx]
         if not selected_train:
             messagebox.showwarning(
@@ -3691,15 +3993,22 @@ class UltimateLabeller:
                     selected_train = selected_val[:]
 
         try:
-            mode = self.det_model_mode.get()
-            if mode == "Official YOLO26m.pt (Bundled)":
+            choice, custom_path = weight_choice
+            extra_train_args: list[str] = []
+            if choice == "official":
                 model_path = self._resolve_official_model_path()
+            elif choice == "custom":
+                if not custom_path:
+                    messagebox.showerror("Model Error", "No custom model selected.", parent=self.root)
+                    return
+                model_path = self._resolve_custom_model_path(custom_path)
             else:
-                model_path = self.yolo_path.get().strip()
+                # Scratch mode: use official architecture entry and disable pretrained weights.
+                model_path = self._resolve_official_model_path()
+                extra_train_args.append("pretrained=False")
             model_path = os.path.abspath(model_path)
-            if not os.path.isfile(model_path):
-                messagebox.showerror("Model Error", f"Model file not found:\n{model_path}", parent=self.root)
-                return
+            self.yolo_path.set(model_path)
+            self._register_model_path(model_path)
 
             os.makedirs(out_dir, exist_ok=True)
             dataset_yaml = self._write_training_dataset_files(
@@ -3724,6 +4033,9 @@ class UltimateLabeller:
                 f"name={run_name}",
                 "exist_ok=True",
             ]
+            train_device = "0" if self._can_use_cuda_runtime() else "cpu"
+            cmd.append(f"device={train_device}")
+            cmd.extend(extra_train_args)
             command_text = " ".join(f"\"{part}\"" if " " in part else part for part in cmd)
             self.train_command_var.set(command_text)
             self._append_training_log("=" * 60)
@@ -3842,6 +4154,9 @@ class UltimateLabeller:
             shutil.copy2(img_path, f"{dst_img_dir}/{target_stem}{ext}")
             if os.path.isfile(lbl_path):
                 shutil.copy2(lbl_path, f"{dst_lbl_dir}/{target_stem}.txt")
+                rot_meta_path = self._rotation_meta_path_for_label(lbl_path)
+                if os.path.isfile(rot_meta_path):
+                    shutil.copy2(rot_meta_path, self._rotation_meta_path_for_label(f"{dst_lbl_dir}/{target_stem}.txt"))
             count += 1
         return count
 
@@ -3861,14 +4176,21 @@ class UltimateLabeller:
                 width, height = im.width, im.height
 
             anns: list[dict[str, Any]] = []
+            angles_from_meta: list[float] = []
+            if os.path.isfile(self._rotation_meta_path_for_label(lbl_path)):
+                angles_from_meta = self._read_rotation_meta_angles(self._rotation_meta_path_for_label(lbl_path)) or []
+            ann_idx = 0
             if os.path.isfile(lbl_path):
                 with open(lbl_path, "r", encoding="utf-8") as f:
                     for line in f:
                         parts = line.strip().split()
-                        if len(parts) != 5:
+                        if len(parts) < 5:
                             continue
                         cls_id = int(float(parts[0]))
-                        cx, cy, w, h = map(float, parts[1:])
+                        cx, cy, w, h = map(float, parts[1:5])
+                        angle_deg = float(parts[5]) if len(parts) >= 6 else 0.0
+                        if len(parts) < 6 and ann_idx < len(angles_from_meta):
+                            angle_deg = float(angles_from_meta[ann_idx])
                         x1 = (cx - w / 2) * width
                         y1 = (cy - h / 2) * height
                         x2 = (cx + w / 2) * width
@@ -3879,7 +4201,9 @@ class UltimateLabeller:
                             "class_name": cls_name,
                             "bbox_xyxy": [x1, y1, x2, y2],
                             "bbox_yolo": [cx, cy, w, h],
+                            "angle_deg": self.normalize_angle_deg(angle_deg),
                         })
+                        ann_idx += 1
 
             payload = {
                 "image": img_name,
@@ -3907,24 +4231,141 @@ class UltimateLabeller:
         x1, x2 = sorted([box[0], box[2]])
         y1, y2 = sorted([box[1], box[3]])
         
-        return [
+        out = [
             max(0, min(W, x1)),
             max(0, min(H, y1)),
             max(0, min(W, x2)),
             max(0, min(H, y2)),
-            box[4]
+            box[4],
         ]
+        if len(box) >= 6:
+            out.append(self.normalize_angle_deg(float(box[5])))
+        else:
+            out.append(0.0)
+        return out
+
+    def normalize_angle_deg(self, angle_deg: float) -> float:
+        return ((angle_deg + 180.0) % 360.0) - 180.0
+
+    def get_rect_angle_deg(self, rect: list[float]) -> float:
+        if len(rect) >= 6:
+            return self.normalize_angle_deg(float(rect[5]))
+        return 0.0
+
+    def set_rect_angle_deg(self, rect: list[float], angle_deg: float) -> None:
+        normalized = self.normalize_angle_deg(float(angle_deg))
+        if len(rect) >= 6:
+            rect[5] = normalized
+        else:
+            rect.append(normalized)
+
+    def rotate_point_around_center(
+        self,
+        x: float,
+        y: float,
+        cx: float,
+        cy: float,
+        angle_deg: float,
+    ) -> tuple[float, float]:
+        theta = math.radians(angle_deg)
+        cos_t = math.cos(theta)
+        sin_t = math.sin(theta)
+        dx = x - cx
+        dy = y - cy
+        return cx + dx * cos_t - dy * sin_t, cy + dx * sin_t + dy * cos_t
+
+    def get_rotated_corners(self, rect: list[float]) -> list[tuple[float, float]]:
+        x1 = min(rect[0], rect[2])
+        y1 = min(rect[1], rect[3])
+        x2 = max(rect[0], rect[2])
+        y2 = max(rect[1], rect[3])
+        cx = (x1 + x2) / 2
+        cy = (y1 + y2) / 2
+        angle_deg = self.get_rect_angle_deg(rect)
+
+        corners = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+        if abs(angle_deg) <= 1e-6:
+            return corners
+        return [self.rotate_point_around_center(px, py, cx, cy, angle_deg) for px, py in corners]
+
+    def _point_in_rotated_box(self, x: float, y: float, rect: list[float]) -> bool:
+        x1 = min(rect[0], rect[2])
+        y1 = min(rect[1], rect[3])
+        x2 = max(rect[0], rect[2])
+        y2 = max(rect[1], rect[3])
+        cx = (x1 + x2) / 2
+        cy = (y1 + y2) / 2
+        angle_deg = self.get_rect_angle_deg(rect)
+
+        # Rotate test point back into axis-aligned box local frame.
+        px, py = self.rotate_point_around_center(x, y, cx, cy, -angle_deg)
+        return x1 < px < x2 and y1 < py < y2
+
+    def _rotation_meta_path_for_label(self, label_path: str) -> str:
+        return f"{label_path}.rot.json"
+
+    def _read_rotation_meta_angles(self, rot_meta_path: str) -> list[float] | None:
+        if not os.path.isfile(rot_meta_path):
+            return None
+        try:
+            with open(rot_meta_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            raw_angles = payload.get("angles_deg", [])
+            if not isinstance(raw_angles, list):
+                return None
+            out: list[float] = []
+            for angle in raw_angles:
+                out.append(self.normalize_angle_deg(float(angle)))
+            return out
+        except Exception:
+            self.logger.exception("Failed to read rotation meta: %s", rot_meta_path)
+            return None
     
     def get_handles(self, rect):
         """??????????"""
-        x1, y1, x2, y2 = rect[:4]
+        x1 = min(rect[0], rect[2])
+        y1 = min(rect[1], rect[3])
+        x2 = max(rect[0], rect[2])
+        y2 = max(rect[1], rect[3])
         xm = (x1 + x2) / 2
         ym = (y1 + y2) / 2
-        
-        return [
+
+        local_handles = [
             (x1, y1), (xm, y1), (x2, y1), (x2, ym),
             (x2, y2), (xm, y2), (x1, y2), (x1, ym)
         ]
+        angle_deg = self.get_rect_angle_deg(rect)
+        if abs(angle_deg) <= 1e-6:
+            return local_handles
+        cx = (x1 + x2) / 2
+        cy = (y1 + y2) / 2
+        return [self.rotate_point_around_center(px, py, cx, cy, angle_deg) for px, py in local_handles]
+
+    def get_rotation_handle_points(self, rect: list[float]) -> tuple[float, float, float, float]:
+        x1 = min(rect[0], rect[2])
+        y1 = min(rect[1], rect[3])
+        x2 = max(rect[0], rect[2])
+        y2 = max(rect[1], rect[3])
+        cx = (x1 + x2) / 2
+        cy = (y1 + y2) / 2
+        angle_deg = self.get_rect_angle_deg(rect)
+
+        top_center_local = ((x1 + x2) / 2, y1)
+        top_x, top_y = self.rotate_point_around_center(
+            top_center_local[0], top_center_local[1], cx, cy, angle_deg
+        )
+        vx = top_x - cx
+        vy = top_y - cy
+        vlen = math.hypot(vx, vy)
+        if vlen <= 1e-6:
+            vx, vy = 0.0, -1.0
+            vlen = 1.0
+        ux = vx / vlen
+        uy = vy / vlen
+        stem_len_img = max(10.0, 26.0 / max(self.scale, 1e-6))
+        rot_x = top_x + ux * stem_len_img
+        rot_y = top_y + uy * stem_len_img
+        return top_x, top_y, rot_x, rot_y
     
     def canvas_to_img(self, x, y):
         """Canvas ???????????????"""
@@ -3979,6 +4420,10 @@ class UltimateLabeller:
         self.root.bind("<Key-D>", lambda e: self.prev_img())
         self.root.bind("<Key-a>", lambda e: self.autolabel_red())
         self.root.bind("<Key-A>", lambda e: self.autolabel_red())
+        self.root.bind("<Key-q>", lambda e: self.rotate_selected_boxes(-5.0))
+        self.root.bind("<Key-Q>", lambda e: self.rotate_selected_boxes(-15.0))
+        self.root.bind("<Key-e>", lambda e: self.rotate_selected_boxes(5.0))
+        self.root.bind("<Key-E>", lambda e: self.rotate_selected_boxes(15.0))
         self.root.bind("<Control-z>", lambda e: self.undo())
         self.root.bind("<Control-Z>", lambda e: self.undo())
         self.root.bind("<Control-y>", lambda e: self.redo())
