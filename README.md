@@ -5,6 +5,10 @@ Desktop image annotation tool for object detection datasets (Tkinter + Ultralyti
 ## Features
 
 - Bounding-box annotation with drag, move, and resize handles
+- Rotated bounding boxes:
+  - Drag rotate knob on selected box
+  - 8 resize handles follow box rotation
+  - Keyboard rotate (`Q/E`, `Shift+Q/E`)
 - Multi-select boxes (`Shift/Ctrl + Click`) for batch class reassignment and delete
 - Select all boxes in current image (`Ctrl+A`)
 - Nested/overlapping box picking prefers inner (smaller) box for easier adjustment
@@ -22,6 +26,10 @@ Desktop image annotation tool for object detection datasets (Tkinter + Ultralyti
   - Select model from dropdown library
 - Train from existing labels:
   - Choose training range by index
+  - Choose weight source before training:
+    - Official `yolo26m.pt`
+    - Custom weight file (`.pt` / `.onnx`)
+    - From scratch (`pretrained=False`)
   - Save training artifacts to selected output folder
   - Non-blocking background training (continue labeling while training)
   - Built-in training monitor (command/log/progress/ETA)
@@ -59,6 +67,7 @@ your_project/
 
 - Image extensions: `.png`, `.jpg`, `.jpeg`
 - Label format: YOLO txt (`class cx cy w h`, normalized)
+- Rotated-box metadata (when used): sidecar `*.txt.rot.json` with `angles_deg`
 - Full guide (ZH): `docs/dataset-structure-guide.md`
 
 Removed frames are moved to:
@@ -82,7 +91,7 @@ pip install ultimate_ai_labeller
 From local wheel:
 
 ```bash
-pip install dist/ultimate_ai_labeller-0.1.10-py3-none-any.whl
+pip install dist/ultimate_ai_labeller-*.whl
 ```
 
 From source:
@@ -128,6 +137,8 @@ uvicorn app:app --host 127.0.0.1 --port 8000 --reload
 - `F`: save and next image
 - `D`: previous image
 - `A`: auto red detection
+- `Q/E`: rotate selected box (`-5° / +5°`)
+- `Shift+Q/E`: rotate selected box faster (`-15° / +15°`)
 - `Ctrl+Z`: undo
 - `Ctrl+Y`: redo
 - `Ctrl+A`: select all boxes in current image
@@ -137,6 +148,7 @@ uvicorn app:app --host 127.0.0.1 --port 8000 --reload
 
 - Default detection model mode is `Official YOLO26m.pt (Bundled)`.
 - If the official model file is unavailable locally, import a custom `.pt/.onnx` model from the UI.
+- If CUDA/GPU runtime is incompatible, detection/training automatically falls back to CPU.
 - To use your own Tk app icon, put `app_icon.png` in `src/ai_labeller/assets/`.
 - Session file: `~/.ai_labeller_session.json`.
 - Project progress YAML: `<project_root>/.ai_labeller_progress.yaml` (resume split/image and class names after reopen).
