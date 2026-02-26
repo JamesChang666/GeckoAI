@@ -367,8 +367,10 @@ class UltimateLabeller:
         self.active_rotate_handle = False
         self.rotate_drag_offset_deg = 0.0
         self.is_moving_box = False
+        self.is_drag_selecting = False
         self.drag_start = None
         self.temp_rect_coords = None
+        self.select_rect_coords = None
         self.mouse_pos = (0, 0)
         self.HANDLE_SIZE = self.config.handle_size
         self.show_all_labels = True
@@ -387,6 +389,7 @@ class UltimateLabeller:
         self.var_export_format = tk.StringVar(value="YOLO (.txt)")
         self.var_auto_yolo = tk.BooleanVar(value=False)
         self.var_propagate = tk.BooleanVar(value=False)
+        self.var_propagate_mode = tk.StringVar(value="if_missing")
         self.var_yolo_conf = tk.DoubleVar(value=self.config.default_yolo_conf)
         self.session_path = os.path.join(os.path.expanduser("~"), self.config.session_file_name)
         self.foundation_dino = None
@@ -556,6 +559,21 @@ class UltimateLabeller:
         # For nested/overlapping boxes, prioritize smaller area so inner box is easier to adjust.
         candidates.sort(key=lambda item: (item[0], -item[1]))
         return candidates[0][1]
+
+    def _pick_boxes_in_img_rect(self, ix1: float, iy1: float, ix2: float, iy2: float) -> list[int]:
+        sx1, sx2 = sorted((ix1, ix2))
+        sy1, sy2 = sorted((iy1, iy2))
+        hits: list[int] = []
+        for idx, rect in enumerate(self.rects):
+            corners = self.get_rotated_corners(rect)
+            rx1 = min(px for px, _ in corners)
+            ry1 = min(py for _, py in corners)
+            rx2 = max(px for px, _ in corners)
+            ry2 = max(py for _, py in corners)
+            intersects = not (rx2 < sx1 or rx1 > sx2 or ry2 < sy1 or ry1 > sy2)
+            if intersects:
+                hits.append(idx)
+        return hits
     
     def setup_ui(self):
         # ==================== ??????====================
@@ -1209,12 +1227,23 @@ class UltimateLabeller:
             **checkbox_style
         ).pack(fill="x", pady=4)
         
+        propagate_row = tk.Frame(content, bg=COLORS["bg_white"])
+        propagate_row.pack(fill="x", pady=4)
         tk.Checkbutton(
-            content,
+            propagate_row,
             text=LANG_MAP[self.lang]["propagate"],
             variable=self.var_propagate,
             **checkbox_style
-        ).pack(fill="x", pady=4)
+        ).pack(side="left")
+        self.combo_propagate_mode = ttk.Combobox(
+            propagate_row,
+            state="readonly",
+            width=18,
+            font=self.font_primary,
+        )
+        self.combo_propagate_mode.pack(side="right")
+        self.combo_propagate_mode.bind("<<ComboboxSelected>>", self.on_propagate_mode_changed)
+        self._refresh_propagate_mode_combo()
 
         tk.Label(
             content,
@@ -1553,6 +1582,35 @@ class UltimateLabeller:
     def _refresh_model_dropdown(self) -> None:
         if hasattr(self, "combo_model_path"):
             self.combo_model_path.configure(values=self.model_library)
+
+    def _propagate_mode_choices(self) -> list[tuple[str, str]]:
+        L = LANG_MAP[self.lang]
+        return [
+            ("if_missing", L.get("propagate_mode_if_missing", "No label only")),
+            ("always", L.get("propagate_mode_always", "Always (overwrite existing)")),
+            ("selected", L.get("propagate_mode_selected", "Selected labels only")),
+        ]
+
+    def _refresh_propagate_mode_combo(self) -> None:
+        if not hasattr(self, "combo_propagate_mode"):
+            return
+        choices = self._propagate_mode_choices()
+        self._propagate_label_to_code = {label: code for code, label in choices}
+        self._propagate_code_to_label = {code: label for code, label in choices}
+        self.combo_propagate_mode.configure(values=[label for _, label in choices])
+        current_code = self.var_propagate_mode.get()
+        if current_code not in self._propagate_code_to_label:
+            current_code = "if_missing"
+            self.var_propagate_mode.set(current_code)
+        self.combo_propagate_mode.set(self._propagate_code_to_label[current_code])
+
+    def on_propagate_mode_changed(self, e: Any = None) -> None:
+        if not hasattr(self, "combo_propagate_mode"):
+            return
+        label = self.combo_propagate_mode.get()
+        code = getattr(self, "_propagate_label_to_code", {}).get(label)
+        if code:
+            self.var_propagate_mode.set(code)
 
     def _refresh_class_dropdown(self, preferred_idx: int | None = None) -> None:
         if not hasattr(self, "combo_cls"):
@@ -2399,6 +2457,14 @@ class UltimateLabeller:
                 width=2,
                 dash=(6, 4)
             )
+        if self.select_rect_coords:
+            cx, cy, ex, ey = self.select_rect_coords
+            self.canvas.create_rectangle(
+                cx, cy, ex, ey,
+                outline=COLORS["box_selected"],
+                width=2,
+                dash=(4, 4)
+            )
         
         # 4. Update cursor overlay
         self.update_cursor_overlay()
@@ -2481,8 +2547,11 @@ class UltimateLabeller:
         
         ix, iy = self.canvas_to_img(e.x, e.y)
         is_additive_select = bool(e.state & 0x0001) or bool(e.state & 0x0004)
+        is_ctrl_select = bool(e.state & 0x0004)
         self.active_rotate_handle = False
         self.active_handle = None
+        self.is_drag_selecting = False
+        self.select_rect_coords = None
         
         # Check if one of the resize handles is selected
         if self.selected_idx is not None and len(self._get_selected_indices()) == 1 and not is_additive_select:
@@ -2527,10 +2596,15 @@ class UltimateLabeller:
                 self._sync_class_combo_with_selection()
                 self.push_history()
         else:
-            if not is_additive_select:
-                self._set_selected_indices([])
-            self.drag_start = (ix, iy)
-            self.temp_rect_coords = (e.x, e.y, e.x, e.y)
+            if is_ctrl_select:
+                self.drag_start = (ix, iy)
+                self.is_drag_selecting = True
+                self.select_rect_coords = (e.x, e.y, e.x, e.y)
+            else:
+                if not is_additive_select:
+                    self._set_selected_indices([])
+                self.drag_start = (ix, iy)
+                self.temp_rect_coords = (e.x, e.y, e.x, e.y)
         
         self.render()
     
@@ -2589,9 +2663,17 @@ class UltimateLabeller:
                     rect = self.rects[idx]
                     rect[0] += clamped_dx
                     rect[1] += clamped_dy
-                    rect[2] += clamped_dx
-                    rect[3] += clamped_dy
+                rect[2] += clamped_dx
+                rect[3] += clamped_dy
             self.drag_start = (ix, iy)
+        elif self.is_drag_selecting:
+            if self.select_rect_coords:
+                self.select_rect_coords = (
+                    self.select_rect_coords[0],
+                    self.select_rect_coords[1],
+                    e.x,
+                    e.y,
+                )
         
         else:
             # Draw a new box
@@ -2607,6 +2689,20 @@ class UltimateLabeller:
     
     def on_mouse_up(self, e):
         """?????"""
+        if self.is_drag_selecting and self.select_rect_coords:
+            sx, sy, ex, ey = self.select_rect_coords
+            ix1, iy1 = self.canvas_to_img(sx, sy)
+            ix2, iy2 = self.canvas_to_img(ex, ey)
+            hits = self._pick_boxes_in_img_rect(ix1, iy1, ix2, iy2)
+            merged = sorted(set(self._get_selected_indices() + hits))
+            self._set_selected_indices(merged, primary_idx=hits[-1] if hits else self.selected_idx)
+            self._sync_class_combo_with_selection()
+            self.is_drag_selecting = False
+            self.select_rect_coords = None
+            self.drag_start = None
+            self.render()
+            return
+
         if self.temp_rect_coords:
             ix, iy = self.canvas_to_img(e.x, e.y)
             new_box = self.clamp_box([
@@ -2631,6 +2727,8 @@ class UltimateLabeller:
         self.active_handle = None
         self.active_rotate_handle = False
         self.rotate_drag_offset_deg = 0.0
+        self.is_drag_selecting = False
+        self.select_rect_coords = None
         self.render()
     
     def on_zoom(self, e):
@@ -2999,8 +3097,10 @@ class UltimateLabeller:
             self.active_rotate_handle = False
             self.rotate_drag_offset_deg = 0.0
             self.is_moving_box = False
+            self.is_drag_selecting = False
             self.drag_start = None
             self.temp_rect_coords = None
+            self.select_rect_coords = None
             self.update_info_text()
             self.render()
 
@@ -3139,6 +3239,8 @@ class UltimateLabeller:
             return
         
         prev_rects = copy.deepcopy(self.rects)
+        prev_selected_indices = self._get_selected_indices()
+        prev_selected_rects = [copy.deepcopy(self.rects[idx]) for idx in prev_selected_indices if 0 <= idx < len(self.rects)]
         self.rects = []
         self.history_manager.clear()
         self.selected_idx = None
@@ -3147,8 +3249,10 @@ class UltimateLabeller:
         self.active_rotate_handle = False
         self.rotate_drag_offset_deg = 0.0
         self.is_moving_box = False
+        self.is_drag_selecting = False
         self.drag_start = None
         self.temp_rect_coords = None
+        self.select_rect_coords = None
         
         # ?????
         base = os.path.splitext(os.path.basename(path))[0]
@@ -3156,7 +3260,21 @@ class UltimateLabeller:
         rot_meta_path = self._rotation_meta_path_for_label(label_path)
         
         label_exists = os.path.exists(label_path) and os.path.getsize(label_path) > 0
-        if label_exists:
+        propagate_mode = self.var_propagate_mode.get()
+        should_propagate = False
+        if self.var_propagate.get():
+            if propagate_mode == "if_missing":
+                should_propagate = not label_exists
+            else:
+                should_propagate = True
+
+        if should_propagate:
+            source_rects = prev_rects
+            if propagate_mode == "selected":
+                source_rects = prev_selected_rects
+            self.rects = [self.clamp_box(copy.deepcopy(r)) for r in source_rects]
+
+        if label_exists and not should_propagate:
             W, H = self.img_pil.width, self.img_pil.height
             has_inline_angle = False
             try:
@@ -3184,9 +3302,7 @@ class UltimateLabeller:
                 self.logger.exception("Failed to parse label file: %s", label_path)
                 messagebox.showerror("Error", f"Failed to read label file: {label_path}")
                 self.rects = []
-        else:
-            if self.var_propagate.get():
-                self.rects = prev_rects
+        elif not label_exists:
             if self.var_auto_yolo.get():
                 self.run_yolo_detection()
         

@@ -36,7 +36,7 @@ Desktop image annotation tool for object detection datasets (Tkinter + Ultralyti
 - Class management:
   - Add / rename / delete class in class table
   - Deleting a class reindexes following class IDs automatically
-- Auto-detect and propagate options
+- Auto-detect and propagate options (3 propagate modes: no-label-only / always / selected labels only)
 - Scrollable right settings panel
 - Remove/restore bad frames from split
 - Image dropdown jump
@@ -137,11 +137,12 @@ uvicorn app:app --host 127.0.0.1 --port 8000 --reload
 - `F`: save and next image
 - `D`: previous image
 - `A`: auto red detection
-- `Q/E`: rotate selected box (`-5° / +5°`)
-- `Shift+Q/E`: rotate selected box faster (`-15° / +15°`)
+- `Q/E`: rotate selected box (-5 deg / +5 deg)
+- `Shift+Q/E`: rotate selected box faster (-15 deg / +15 deg)
 - `Ctrl+Z`: undo
 - `Ctrl+Y`: redo
 - `Ctrl+A`: select all boxes in current image
+- `Ctrl+Left Drag`: marquee multi-select boxes
 - `Delete`: delete selected box
 
 ## Notes
