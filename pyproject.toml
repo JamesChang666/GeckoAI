@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ultimate_ai_labeller"
+name = "GeckoAI"
 version = "0.1.13"
 description = "AI Labelling tool for computer vision"
 readme = "README.md"
@@ -13,11 +13,23 @@ dependencies = [
     "numpy",
     "opencv-python",
     "ultralytics",
+    "pandas",
+    "openpyxl",
+    "reportlab",
+]
+
+[project.optional-dependencies]
+build = [
+    "pyinstaller>=6.0",
 ]
 
 [project.scripts]
-# 設定指令名稱：安裝後在終端機輸入 ai-labeller 就能啟動
-ai-labeller = "ai_labeller.main:main"
+# CLI commands
+geckoai = "ai_labeller.app_all:main"
+geckoai-all = "ai_labeller.app_all:main"
+geckoai-label = "ai_labeller.app_label:main"
+geckoai-detect = "ai_labeller.app_detect:main"
+geckoai-report = "ai_labeller.detection_report_generator:main"
 
 [tool.setuptools]
 include-package-data = true

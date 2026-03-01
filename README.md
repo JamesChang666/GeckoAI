@@ -1,4 +1,4 @@
-# Ultimate AI Labeller
+# GeckoAI
 
 Desktop image annotation tool for object detection datasets (Tkinter + Ultralytics), with a separate web project.
 
@@ -48,7 +48,7 @@ Desktop image annotation tool for object detection datasets (Tkinter + Ultralyti
 
 ## Repositories
 
-- Desktop app (this repo): `https://github.com/JamesChang666/ultimate_ai_labeller`
+- Desktop app (this repo): `https://github.com/JamesChang666/GeckoAI`
 - Web app (separate repo): `https://github.com/JamesChang666/labeller_web`
 
 ## Dataset Structure
@@ -66,8 +66,8 @@ your_project/
 ```
 
 - Image extensions: `.png`, `.jpg`, `.jpeg`
-- Label format: YOLO txt (`class cx cy w h`, normalized)
-- Rotated-box metadata (when used): sidecar `*.txt.rot.json` with `angles_deg`
+- Label format: YOLO OBB txt (`class x1 y1 x2 y2 x3 y3 x4 y4`, normalized)
+- Legacy labels (`class cx cy w h`) are still readable for backward compatibility
 - Full guide (ZH): `docs/dataset-structure-guide.md`
 
 Removed frames are moved to:
@@ -85,13 +85,13 @@ your_project/
 From PyPI:
 
 ```bash
-pip install ultimate_ai_labeller
+pip install GeckoAI
 ```
 
 From local wheel:
 
 ```bash
-pip install dist/ultimate_ai_labeller-*.whl
+pip install dist/GeckoAI-*.whl
 ```
 
 From source:
@@ -106,16 +106,55 @@ For development:
 pip install -e .
 ```
 
+One-shot install for build + packaging:
+
+```bash
+pip install -e ".[build]"
+```
+
 ## Run
 
 ```bash
-ai-labeller
+geckoai
 ```
 
 Or:
 
 ```bash
 python src/ai_labeller/main.py
+```
+
+Single-mode entrypoints:
+
+```bash
+geckoai-all
+geckoai-label
+geckoai-detect
+geckoai-report <detect_results_xxx.csv>
+```
+
+## Build EXE (Windows)
+
+Install once:
+
+```bash
+pip install -e ".[build]"
+```
+
+Build one target:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_exe.ps1 -Target all
+powershell -ExecutionPolicy Bypass -File .\scripts\build_exe.ps1 -Target label
+powershell -ExecutionPolicy Bypass -File .\scripts\build_exe.ps1 -Target detect
+```
+
+Output:
+
+```text
+dist/GeckoAI-All/GeckoAI-All.exe
+dist/GeckoAI-Label/GeckoAI-Label.exe
+dist/GeckoAI-Detect/GeckoAI-Detect.exe
 ```
 
 ## Web Version
