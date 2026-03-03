@@ -51,6 +51,12 @@ except ImportError:
     HAS_YOLO = False
 
 try:
+    from paddleocr import PaddleOCR
+    HAS_PADDLE_OCR = True
+except ImportError:
+    HAS_PADDLE_OCR = False
+
+try:
     import torch
     warnings.filterwarnings(
         "ignore",
@@ -479,6 +485,10 @@ class GeckoAI:
         self.detect_golden_iou_var = tk.DoubleVar(value=0.50)
         self.detect_golden_class_var = tk.StringVar(value="")
         self._detect_golden_sample: dict[str, Any] | None = None
+        self._detect_last_ocr_id: str = ""
+        self._detect_last_ocr_sub_id: str = ""
+        self._detect_ocr_warning_shown = False
+        self._paddle_ocr_engine: Any = None
         self._golden_capture_active = False
         self._golden_capture_temp_root: str | None = None
         self._golden_capture_output_dir: str | None = None
@@ -2345,7 +2355,16 @@ class GeckoAI:
                 cls_names = sorted({str(t.get("class_name") or f"id:{t.get('class_id')}") for t in targets}) if targets else []
                 cls_text = ", ".join(cls_names[:3]) + (" ..." if len(cls_names) > 3 else "") if cls_names else "None"
                 lbl_name = os.path.basename(str(self._detect_golden_sample.get("label_path", "")))
-                golden_summary = f"label={lbl_name}, targets={len(targets)}, classes={cls_text}"
+                id_cls_name = self._detect_golden_sample.get("id_class_name")
+                id_cls_id = self._detect_golden_sample.get("id_class_id")
+                id_text = str(id_cls_name or (f"id:{id_cls_id}" if id_cls_id is not None else "None"))
+                sub_id_cls_name = self._detect_golden_sample.get("sub_id_class_name")
+                sub_id_cls_id = self._detect_golden_sample.get("sub_id_class_id")
+                sub_id_text = str(sub_id_cls_name or (f"id:{sub_id_cls_id}" if sub_id_cls_id is not None else "None"))
+                golden_summary = (
+                    f"label={lbl_name}, targets={len(targets)}, classes={cls_text}, "
+                    f"id_class={id_text}, sub_id_class={sub_id_text}"
+                )
             tk.Label(
                 card,
                 text=f"Golden Sample: {golden_summary}",
@@ -2530,6 +2549,8 @@ class GeckoAI:
             messagebox.showwarning("Golden Sample", "No valid YOLO labels found in selected file.", parent=self.root)
             return
         class_mapping = self._load_mapping_from_dataset_yaml(mapping_path)
+        id_cfg_path = self._find_golden_id_config_in_folder(golden_dir)
+        id_cfg = self._load_golden_id_config(id_cfg_path)
         targets: list[dict[str, Any]] = []
         for class_id, rect_norm in candidates:
             class_name = class_mapping.get(int(class_id)) if class_mapping else None
@@ -2550,6 +2571,11 @@ class GeckoAI:
             "label_path": os.path.abspath(label_path),
             "targets": targets,
             "mapping_path": os.path.abspath(mapping_path),
+            "id_class_id": id_cfg.get("id_class_id") if id_cfg else None,
+            "id_class_name": id_cfg.get("id_class_name") if id_cfg else None,
+            "sub_id_class_id": id_cfg.get("sub_id_class_id") if id_cfg else None,
+            "sub_id_class_name": id_cfg.get("sub_id_class_name") if id_cfg else None,
+            "id_config_path": id_cfg.get("id_config_path") if id_cfg else None,
         }
         self.detect_run_mode_var.set("golden")
         self.show_detect_source_page()
@@ -2658,11 +2684,34 @@ class GeckoAI:
 
         self.detect_output_dir_var.set(out_dir)
         self.detect_golden_class_var.set(str(targets[0].get("class_name") or targets[0].get("class_id")))
+        id_choice, sub_id_choice = self._prompt_golden_id_classes(class_mapping, parent=self.root)
+        id_cfg_path = None
+        id_class_id = None
+        id_class_name = None
+        sub_id_class_id = None
+        sub_id_class_name = None
+        if id_choice is not None:
+            id_class_id, id_class_name = id_choice
+        if sub_id_choice is not None:
+            sub_id_class_id, sub_id_class_name = sub_id_choice
+        if id_choice is not None or sub_id_choice is not None:
+            id_cfg_path = self._write_golden_id_config(
+                out_dir,
+                id_class_id,
+                id_class_name,
+                sub_id_class_id=sub_id_class_id,
+                sub_id_class_name=sub_id_class_name,
+            )
         self._detect_golden_sample = {
             "label_path": lbl_dst,
             "targets": targets,
             "mapping_path": yaml_dst,
             "image_path": os.path.abspath(f"{tmp_root}/images/train/{img_name}"),
+            "id_class_id": id_class_id,
+            "id_class_name": id_class_name,
+            "sub_id_class_id": sub_id_class_id,
+            "sub_id_class_name": sub_id_class_name,
+            "id_config_path": id_cfg_path,
         }
         self.detect_run_mode_var.set("golden")
         self._cleanup_golden_capture_temp()
@@ -2973,6 +3022,118 @@ class GeckoAI:
             mapping = {i: name for i, name in enumerate(seq_names)}
         return mapping
 
+    def _find_golden_id_config_in_folder(self, folder: str) -> str | None:
+        candidates = [
+            os.path.join(folder, "id_config.json"),
+            os.path.join(folder, "id_class.json"),
+            os.path.join(folder, "golden_id.json"),
+        ]
+        for p in candidates:
+            if os.path.isfile(p):
+                return p
+        return None
+
+    def _load_golden_id_config(self, json_path: str | None) -> dict[str, Any] | None:
+        if not json_path or not os.path.isfile(json_path):
+            return None
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception:
+            return None
+        raw_id = payload.get("id_class_id")
+        cid = None
+        if raw_id is not None:
+            try:
+                cid = int(raw_id)
+            except Exception:
+                cid = None
+        raw_sub_id = payload.get("sub_id_class_id")
+        sub_cid = None
+        if raw_sub_id is not None:
+            try:
+                sub_cid = int(raw_sub_id)
+            except Exception:
+                sub_cid = None
+        if cid is None and sub_cid is None:
+            return None
+        name = str(payload.get("id_class_name", "")).strip()
+        sub_name = str(payload.get("sub_id_class_name", "")).strip()
+        return {
+            "id_class_id": cid,
+            "id_class_name": name or None,
+            "sub_id_class_id": sub_cid,
+            "sub_id_class_name": sub_name or None,
+            "id_config_path": os.path.abspath(json_path),
+        }
+
+    def _prompt_golden_id_classes(
+        self,
+        class_mapping: dict[int, str],
+        parent: Any = None,
+    ) -> tuple[tuple[int, str] | None, tuple[int, str] | None]:
+        if not class_mapping:
+            return None, None
+        max_idx = max(class_mapping.keys())
+        options = "\n".join(
+            f"{idx}: {class_mapping[idx]}"
+            for idx in sorted(class_mapping.keys())
+        )
+        id_prompt = (
+            "Select class ID for OCR image ID extraction in detect mode.\n"
+            "-1: Disable OCR ID\n\n"
+            f"{options}"
+        )
+        selected_id = simpledialog.askinteger(
+            "Golden ID Class",
+            id_prompt,
+            parent=parent or self.root,
+            minvalue=-1,
+            maxvalue=max_idx,
+            initialvalue=-1,
+        )
+        id_choice = None
+        if selected_id is not None and selected_id >= 0:
+            id_choice = (selected_id, str(class_mapping.get(selected_id, selected_id)))
+
+        sub_prompt = (
+            "Select class ID for OCR sub ID extraction in detect mode.\n"
+            "-1: Disable OCR Sub ID\n\n"
+            f"{options}"
+        )
+        selected_sub_id = simpledialog.askinteger(
+            "Golden Sub ID Class",
+            sub_prompt,
+            parent=parent or self.root,
+            minvalue=-1,
+            maxvalue=max_idx,
+            initialvalue=-1,
+        )
+        sub_id_choice = None
+        if selected_sub_id is not None and selected_sub_id >= 0:
+            sub_id_choice = (selected_sub_id, str(class_mapping.get(selected_sub_id, selected_sub_id)))
+
+        return id_choice, sub_id_choice
+
+    def _write_golden_id_config(
+        self,
+        folder: str,
+        class_id: int | None,
+        class_name: str | None,
+        sub_id_class_id: int | None = None,
+        sub_id_class_name: str | None = None,
+    ) -> str:
+        cfg_path = os.path.join(folder, "id_config.json")
+        payload = {
+            "id_class_id": int(class_id) if class_id is not None else None,
+            "id_class_name": str(class_name) if class_name else "",
+            "sub_id_class_id": int(sub_id_class_id) if sub_id_class_id is not None else None,
+            "sub_id_class_name": str(sub_id_class_name) if sub_id_class_name else "",
+            "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        }
+        atomic_write_json(cfg_path, payload)
+        return cfg_path
+
     def _pick_golden_rect_on_image(self, image_path: str) -> tuple[float, float, float, float] | None:
         try:
             pil_img = Image.open(image_path).convert("RGB")
@@ -3111,6 +3272,18 @@ class GeckoAI:
             if mode in {"class", "both"} and not has_class:
                 messagebox.showwarning("Detect Mode", "Golden mode requires class info (ID or mapping name).", parent=self.root)
                 return
+            id_enabled = (
+                self._detect_golden_sample.get("id_class_id") is not None
+                or bool(str(self._detect_golden_sample.get("id_class_name", "")).strip())
+                or self._detect_golden_sample.get("sub_id_class_id") is not None
+                or bool(str(self._detect_golden_sample.get("sub_id_class_name", "")).strip())
+            )
+            if id_enabled and not HAS_PADDLE_OCR:
+                messagebox.showwarning(
+                    "Detect Mode",
+                    "ID/Sub ID OCR is configured, but paddleocr is not installed. Detection will run without OCR IDs.",
+                    parent=self.root,
+                )
         self.start_detect_mode(
             model_path=self.detect_model_path_var.get().strip(),
             source_kind=self.detect_source_mode_var.get().strip().lower(),
@@ -3535,18 +3708,26 @@ class GeckoAI:
 
     def _evaluate_golden_match(self, result0: Any) -> tuple[str | None, str]:
         if self.detect_run_mode_var.get().strip().lower() != "golden" or self._detect_golden_sample is None:
+            self._detect_last_ocr_id = ""
+            self._detect_last_ocr_sub_id = ""
             return None, ""
         targets = self._detect_golden_sample.get("targets") or []
         if not targets:
+            self._detect_last_ocr_id = ""
+            self._detect_last_ocr_sub_id = ""
             return "FAIL", "golden targets missing"
         mode = self.detect_golden_mode_var.get().strip().lower()
         iou_thr = float(self.detect_golden_iou_var.get())
         h, w = getattr(result0, "orig_shape", (0, 0))
         if h <= 0 or w <= 0:
+            self._detect_last_ocr_id = ""
+            self._detect_last_ocr_sub_id = ""
             return "FAIL", "invalid frame shape"
 
         boxes = getattr(result0, "boxes", None)
         if boxes is None or getattr(boxes, "xyxy", None) is None or getattr(boxes, "cls", None) is None:
+            self._detect_last_ocr_id = ""
+            self._detect_last_ocr_sub_id = ""
             return "FAIL", "no detections"
 
         det_xyxy = boxes.xyxy.tolist()
@@ -3607,24 +3788,175 @@ class GeckoAI:
                 matched_targets += 1
 
         total_targets = len(targets)
+        ocr_id = self._extract_ocr_id_from_result(result0)
+        ocr_sub_id = self._extract_ocr_sub_id_from_result(result0)
+        self._detect_last_ocr_id = ocr_id
+        self._detect_last_ocr_sub_id = ocr_sub_id
         if matched_targets == total_targets:
             avg_iou = sum(best_ious) / max(1, len(best_ious))
-            return "PASS", f"{matched_targets}/{total_targets} matched, avg IoU={avg_iou:.3f}"
+            msg = f"{matched_targets}/{total_targets} matched, avg IoU={avg_iou:.3f}"
+            if ocr_id:
+                msg = f"{msg}, id={ocr_id}"
+            if ocr_sub_id:
+                msg = f"{msg}, sub_id={ocr_sub_id}"
+            return "PASS", msg
         avg_iou = sum(best_ious) / max(1, len(best_ious))
-        return "FAIL", f"{matched_targets}/{total_targets} matched, avg IoU={avg_iou:.3f}"
+        msg = f"{matched_targets}/{total_targets} matched, avg IoU={avg_iou:.3f}"
+        if ocr_id:
+            msg = f"{msg}, id={ocr_id}"
+        if ocr_sub_id:
+            msg = f"{msg}, sub_id={ocr_sub_id}"
+        return "FAIL", msg
+
+    def _get_paddle_ocr_engine(self) -> Any:
+        if not HAS_PADDLE_OCR:
+            return None
+        if self._paddle_ocr_engine is not None:
+            return self._paddle_ocr_engine
+        try:
+            self._paddle_ocr_engine = PaddleOCR(
+                use_angle_cls=False,
+                lang="en",
+                show_log=False,
+            )
+        except TypeError:
+            # Compatibility fallback for older PaddleOCR versions.
+            self._paddle_ocr_engine = PaddleOCR(use_angle_cls=False, lang="en")
+        except Exception:
+            self.logger.exception("Failed to initialize PaddleOCR engine")
+            self._paddle_ocr_engine = None
+        return self._paddle_ocr_engine
+
+    def _extract_ocr_text_from_result(
+        self,
+        result0: Any,
+        tgt_id: int | None,
+        tgt_name: str,
+    ) -> str:
+        tgt_name = str(tgt_name or "").strip().lower()
+        if tgt_id is None and not tgt_name:
+            return ""
+
+        if not HAS_PADDLE_OCR:
+            if not self._detect_ocr_warning_shown:
+                self._detect_ocr_warning_shown = True
+                self.logger.warning("OCR ID/Sub ID enabled but paddleocr is not installed; skipping OCR.")
+            return ""
+        ocr_engine = self._get_paddle_ocr_engine()
+        if ocr_engine is None:
+            return ""
+
+        img = getattr(result0, "orig_img", None)
+        if img is None:
+            return ""
+        boxes = getattr(result0, "boxes", None)
+        if boxes is None or getattr(boxes, "xyxy", None) is None or getattr(boxes, "cls", None) is None:
+            return ""
+        names_map = getattr(result0, "names", {}) or {}
+        confs = boxes.conf.tolist() if getattr(boxes, "conf", None) is not None else []
+        det_cls = boxes.cls.tolist()
+        det_xyxy = boxes.xyxy.tolist()
+
+        def norm_name(cid: int) -> str:
+            if isinstance(names_map, dict):
+                return str(names_map.get(cid, cid)).strip().lower()
+            if isinstance(names_map, (list, tuple)) and 0 <= cid < len(names_map):
+                return str(names_map[cid]).strip().lower()
+            return str(cid).strip().lower()
+
+        chosen_idx = None
+        chosen_conf = -1.0
+        for i, cid_raw in enumerate(det_cls):
+            cid = int(cid_raw)
+            class_match = (tgt_id is not None and cid == int(tgt_id)) or (tgt_name and norm_name(cid) == tgt_name)
+            if not class_match:
+                continue
+            conf = float(confs[i]) if i < len(confs) else 0.0
+            if conf > chosen_conf:
+                chosen_conf = conf
+                chosen_idx = i
+        if chosen_idx is None or chosen_idx >= len(det_xyxy):
+            return ""
+
+        h, w = img.shape[:2]
+        box = det_xyxy[chosen_idx]
+        x1 = max(0, min(w - 1, int(math.floor(float(box[0])))))
+        y1 = max(0, min(h - 1, int(math.floor(float(box[1])))))
+        x2 = max(0, min(w, int(math.ceil(float(box[2])))))
+        y2 = max(0, min(h, int(math.ceil(float(box[3])))))
+        if x2 <= x1 or y2 <= y1:
+            return ""
+
+        crop = img[y1:y2, x1:x2]
+        if crop is None or crop.size == 0:
+            return ""
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
+        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+        _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        try:
+            ocr_input = cv2.cvtColor(bw, cv2.COLOR_GRAY2BGR)
+            raw = ocr_engine.ocr(ocr_input, cls=False)
+        except Exception:
+            return ""
+        texts: list[str] = []
+
+        def collect_texts(node: Any) -> None:
+            if isinstance(node, (list, tuple)):
+                if (
+                    len(node) >= 2
+                    and isinstance(node[1], (list, tuple))
+                    and len(node[1]) >= 1
+                    and isinstance(node[1][0], str)
+                ):
+                    texts.append(node[1][0])
+                    return
+                for item in node:
+                    collect_texts(item)
+
+        collect_texts(raw)
+        text = " ".join(t for t in texts if t).strip()
+        cleaned = re.sub(r"[^0-9A-Za-z_-]+", "", text)
+        return cleaned[:128]
+
+    def _extract_ocr_id_from_result(self, result0: Any) -> str:
+        sample = self._detect_golden_sample or {}
+        return self._extract_ocr_text_from_result(
+            result0,
+            sample.get("id_class_id"),
+            str(sample.get("id_class_name", "")),
+        )
+
+    def _extract_ocr_sub_id_from_result(self, result0: Any) -> str:
+        sample = self._detect_golden_sample or {}
+        return self._extract_ocr_text_from_result(
+            result0,
+            sample.get("sub_id_class_id"),
+            str(sample.get("sub_id_class_name", "")),
+        )
 
     def _append_detect_report_row(self, image_name: str, result0: Any, status: str | None, details: str) -> None:
         try:
             counts = self._detect_class_counts(result0)
             class_text = "; ".join(f"{k} x{v}" for k, v in sorted(counts.items())) if counts else "No detections"
             iou_text = f"{float(self.detect_golden_iou_var.get()):.2f}" if self.detect_run_mode_var.get().strip().lower() == "golden" else ""
+            details_text = str(details or "")
+            if self._detect_last_ocr_id:
+                if details_text:
+                    details_text = f"{details_text}; ocr_id={self._detect_last_ocr_id}"
+                else:
+                    details_text = f"ocr_id={self._detect_last_ocr_id}"
+            if self._detect_last_ocr_sub_id:
+                if details_text:
+                    details_text = f"{details_text}; ocr_sub_id={self._detect_last_ocr_sub_id}"
+                else:
+                    details_text = f"ocr_sub_id={self._detect_last_ocr_sub_id}"
             ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if self._detect_report_csv_path:
                 with open(self._detect_report_csv_path, "a", newline="", encoding="utf-8-sig") as f:
                     writer = csv.writer(f)
                     if self._detect_report_mode == "golden":
                         mode = self.detect_golden_mode_var.get().strip().lower()
-                        writer.writerow([ts, image_name, class_text, mode, iou_text, status or "", details or ""])
+                        writer.writerow([ts, image_name, class_text, mode, iou_text, status or "", details_text])
                     else:
                         writer.writerow([ts, image_name, class_text])
         except Exception:
@@ -3728,6 +4060,10 @@ class GeckoAI:
         if self._detect_class_listbox is None:
             return
         self._detect_class_listbox.delete(0, tk.END)
+        if self._detect_last_ocr_id:
+            self._detect_class_listbox.insert(tk.END, f"[OCR ID] {self._detect_last_ocr_id}")
+        if self._detect_last_ocr_sub_id:
+            self._detect_class_listbox.insert(tk.END, f"[OCR SUB ID] {self._detect_last_ocr_sub_id}")
         counts = self._detect_class_counts(result0)
         if not counts:
             self._detect_class_listbox.insert(tk.END, "No detections")
@@ -6430,6 +6766,22 @@ class GeckoAI:
                 safe_name = cls_name.replace('"', '\\"')
                 yaml_lines.append(f'  {idx}: "{safe_name}"')
             atomic_write_text(f"{golden_dir}/dataset.yaml", "\n".join(yaml_lines) + "\n")
+            id_choice, sub_id_choice = self._prompt_golden_id_classes(
+                {i: n for i, n in enumerate(self.class_names)},
+                parent=self.root,
+            )
+            if id_choice is not None or sub_id_choice is not None:
+                id_class_id = id_choice[0] if id_choice is not None else None
+                id_class_name = id_choice[1] if id_choice is not None else None
+                sub_id_class_id = sub_id_choice[0] if sub_id_choice is not None else None
+                sub_id_class_name = sub_id_choice[1] if sub_id_choice is not None else None
+                self._write_golden_id_config(
+                    golden_dir,
+                    id_class_id,
+                    id_class_name,
+                    sub_id_class_id=sub_id_class_id,
+                    sub_id_class_name=sub_id_class_name,
+                )
             messagebox.showinfo(
                 LANG_MAP[self.lang]["title"],
                 LANG_MAP[self.lang].get("golden_export_done", "Golden folder exported.\nOutput: {path}").format(path=golden_dir),

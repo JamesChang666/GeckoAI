@@ -13,6 +13,7 @@ dependencies = [
     "numpy",
     "opencv-python",
     "ultralytics",
+    "paddleocr",
     "pandas",
     "openpyxl",
     "reportlab",
