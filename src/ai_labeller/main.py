@@ -432,6 +432,9 @@ class GeckoAI:
         self.mouse_pos = (0, 0)
         self.HANDLE_SIZE = self.config.handle_size
         self.show_all_labels = True
+        self.var_show_prev_labels = tk.BooleanVar(value=False)
+        self._prev_image_rects: list[list[float]] = []
+        self._loaded_image_path: str | None = None
         self._cursor_line_x: int | None = None
         self._cursor_line_y: int | None = None
         self._cursor_text_id: int | None = None
@@ -675,6 +678,21 @@ class GeckoAI:
             if intersects:
                 hits.append(idx)
         return hits
+
+    def _pick_prev_box_at_point(self, ix: float, iy: float) -> int | None:
+        candidates: list[tuple[float, int]] = []
+        for idx, rect in enumerate(self._prev_image_rects):
+            if self._point_in_rotated_box(ix, iy, rect):
+                x1 = min(rect[0], rect[2])
+                y1 = min(rect[1], rect[3])
+                x2 = max(rect[0], rect[2])
+                y2 = max(rect[1], rect[3])
+                area = max(1.0, (x2 - x1) * (y2 - y1))
+                candidates.append((area, idx))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: (item[0], -item[1]))
+        return candidates[0][1]
     
     def setup_ui(self):
         # ==================== Top Toolbar ====================
@@ -1309,6 +1327,19 @@ class GeckoAI:
             content,
             text=LANG_MAP[self.lang].get("restore_from_split", "Restore Deleted Frame"),
             command=self.open_restore_removed_dialog
+        ).pack(fill="x", pady=(0, 12))
+
+        tk.Checkbutton(
+            content,
+            text="Show Last Photo Labels (ghost)",
+            variable=self.var_show_prev_labels,
+            command=self.render,
+            bg=COLORS["bg_white"],
+            fg=COLORS["text_primary"],
+            font=self.font_primary,
+            activebackground=COLORS["bg_white"],
+            selectcolor=COLORS["bg_white"],
+            anchor="w",
         ).pack(fill="x", pady=(0, 12))
         
         # Export format
@@ -4539,6 +4570,23 @@ class GeckoAI:
             image=self.img_tk,
             anchor="nw"
         )
+
+        # Optional ghost overlay from last viewed image labels.
+        if self.var_show_prev_labels.get() and self._prev_image_rects:
+            ghost_color = "#A8B0BA"
+            for rect in self._prev_image_rects:
+                corners = self.get_rotated_corners(rect)
+                canvas_points: list[float] = []
+                for px, py in corners:
+                    cxp, cyp = self.img_to_canvas(px, py)
+                    canvas_points.extend([cxp, cyp])
+                self.canvas.create_polygon(
+                    canvas_points,
+                    outline=ghost_color,
+                    width=1,
+                    fill="",
+                    dash=(4, 6),
+                )
         
         # 2. Draw annotations
         box_colors = [
@@ -4789,7 +4837,12 @@ class GeckoAI:
                 self.is_moving_box = False
                 self.drag_start = None
             else:
-                self._set_selected_indices([clicked_idx], primary_idx=clicked_idx)
+                selected = self._get_selected_indices()
+                # If user clicks a box that's already in a multi-selection, keep the group and move together.
+                if clicked_idx in selected and len(selected) > 1:
+                    self._set_selected_indices(selected, primary_idx=clicked_idx)
+                else:
+                    self._set_selected_indices([clicked_idx], primary_idx=clicked_idx)
                 self.is_moving_box = True
                 self.drag_start = (ix, iy)
                 self._sync_class_combo_with_selection()
@@ -4805,6 +4858,31 @@ class GeckoAI:
                 self.drag_start = (ix, iy)
                 self.temp_rect_coords = (e.x, e.y, e.x, e.y)
         
+        self.render()
+
+    def on_mouse_down_right(self, e):
+        """Right button starts drawing a new box directly."""
+        if not self.img_pil:
+            return
+        if self.var_show_prev_labels.get() and self._prev_image_rects:
+            ix, iy = self.canvas_to_img(e.x, e.y)
+            self.active_rotate_handle = False
+            self.active_handle = None
+            self.is_drag_selecting = False
+            self.select_rect_coords = None
+            self.is_moving_box = False
+            self.drag_start = None
+            self.temp_rect_coords = None
+            self.paste_previous_labels(ix, iy)
+            return
+        ix, iy = self.canvas_to_img(e.x, e.y)
+        self.active_rotate_handle = False
+        self.active_handle = None
+        self.is_drag_selecting = False
+        self.select_rect_coords = None
+        self.is_moving_box = False
+        self.drag_start = (ix, iy)
+        self.temp_rect_coords = (e.x, e.y, e.x, e.y)
         self.render()
     
     def on_mouse_drag(self, e):
@@ -4862,8 +4940,8 @@ class GeckoAI:
                     rect = self.rects[idx]
                     rect[0] += clamped_dx
                     rect[1] += clamped_dy
-                rect[2] += clamped_dx
-                rect[3] += clamped_dy
+                    rect[2] += clamped_dx
+                    rect[3] += clamped_dy
             self.drag_start = (ix, iy)
         elif self.is_drag_selecting:
             if self.select_rect_coords:
@@ -4928,6 +5006,24 @@ class GeckoAI:
         self.rotate_drag_offset_deg = 0.0
         self.is_drag_selecting = False
         self.select_rect_coords = None
+        self.render()
+
+    def on_mouse_up_right(self, e):
+        """Finish right-button box drawing."""
+        self.on_mouse_up(e)
+
+    def paste_previous_labels(self, ix: float, iy: float) -> None:
+        if not self.img_pil or not self._prev_image_rects:
+            return
+        prev_idx = self._pick_prev_box_at_point(ix, iy)
+        if prev_idx is None:
+            return
+        copied = self.clamp_box(copy.deepcopy(self._prev_image_rects[prev_idx]))
+        self.push_history()
+        self.rects.append(copied)
+        pasted_idx = len(self.rects) - 1
+        self._set_selected_indices([pasted_idx], primary_idx=pasted_idx)
+        self._sync_class_combo_with_selection()
         self.render()
     
     def on_zoom(self, e):
@@ -5426,6 +5522,7 @@ class GeckoAI:
             return
         
         path = self.image_files[self.current_idx]
+        prev_path = self._loaded_image_path
         self.update_info_text()
         if self.img_pil is not None:
             self.img_pil.close()
@@ -5438,6 +5535,8 @@ class GeckoAI:
             return
         
         prev_rects = copy.deepcopy(self.rects)
+        if prev_path and prev_path != path:
+            self._prev_image_rects = copy.deepcopy(prev_rects)
         prev_selected_indices = self._get_selected_indices()
         prev_selected_rects = [copy.deepcopy(self.rects[idx]) for idx in prev_selected_indices if 0 <= idx < len(self.rects)]
         self.rects = []
@@ -5523,6 +5622,7 @@ class GeckoAI:
         
         self.fit_image_to_canvas()
         self.save_session_state()
+        self._loaded_image_path = path
     
     def save_current(self) -> None:
         """?????????"""
@@ -7026,6 +7126,9 @@ class GeckoAI:
         self.canvas.bind("<ButtonPress-1>", self.on_mouse_down)
         self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
+        self.canvas.bind("<ButtonPress-3>", self.on_mouse_down_right)
+        self.canvas.bind("<B3-Motion>", self.on_mouse_drag)
+        self.canvas.bind("<ButtonRelease-3>", self.on_mouse_up_right)
         self.canvas.bind("<MouseWheel>", self.on_zoom)
         self.canvas.bind("<Configure>", self.on_canvas_resize)
         
