@@ -2,54 +2,48 @@ if __package__ in {None, ""}:
     import os, sys
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import copy
-import csv
 import datetime
-import gc
-import glob
-import hashlib
 import json
 import math
 import os
 import queue
-import random
-import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
-import time
 import tkinter as tk
-import warnings
 from collections import deque
 from importlib import resources
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageTk
+from PIL import Image, ImageTk
 
-from ai_labeller.ui import button_factory as ui_buttons
+from ai_labeller.ui import button_styles
 from ai_labeller.ui.monitor_bounds import get_widget_monitor_bounds
+from ai_labeller.ui import canvas_utils
+from ai_labeller.ui import widget_styles
 from ai_labeller.ui import window_pages
 from ai_labeller.ui import detect_pages
 from ai_labeller.ui import app_layout
 from ai_labeller.ui import overlay_interaction
+from ai_labeller.modes import detect as detect_mode
+from ai_labeller.modes import label as label_mode
 from ai_labeller.features import training_runner
 from ai_labeller.features import training_threading
 from ai_labeller.features import yolo_utils
+from ai_labeller.features import image_load
 from ai_labeller.ui import keybinds
 from ai_labeller.features import camera_utils
 from ai_labeller.features import report_utils
 from ai_labeller.features import ocr_utils
-from ai_labeller.features import image_utils
-from ai_labeller.features import golden
 from ai_labeller.features import golden_controller
 from ai_labeller.features import detect_runtime
 from ai_labeller.features import detect_controller
 from ai_labeller.features import label_controller
 from ai_labeller.features import project_utils
+from ai_labeller.features import file_utils
 from ai_labeller.features import export_utils
 from ai_labeller.constants import COLORS, THEMES, LANG_MAP
 from ai_labeller.core import (
@@ -60,7 +54,6 @@ from ai_labeller.core import (
     atomic_write_text,
     setup_logging,
 )
-from ai_labeller.core import geometry as geom
 
 try:
     import cv2
@@ -68,11 +61,8 @@ try:
 except ImportError:
     HAS_CV2 = False
 
-try:
-    from ultralytics import YOLO
-    HAS_YOLO = True
-except ImportError:
-    HAS_YOLO = False
+HAS_YOLO = True
+
 
 LOGGER = setup_logging()
 
@@ -233,6 +223,208 @@ class GeckoAI:
         self._training_log_lines: list[str] = []
         
         self.setup_custom_style()
+        # bind button creators from ui/button_styles to reduce repetitive callers
+        _creators = button_styles.bind_button_creators(self)
+        self.create_toolbar_button = _creators["create_toolbar_button"]
+        self.create_toolbar_icon_button = _creators["create_toolbar_icon_button"]
+        self.create_primary_button = _creators["create_primary_button"]
+        self.create_secondary_button = _creators["create_secondary_button"]
+        self.create_nav_button = _creators["create_nav_button"]
+        self.lighten_color = _creators["lighten_color"]
+        self.is_accent_bg = _creators["is_accent_bg"]
+        self.toolbar_text_color = _creators["toolbar_text_color"]
+
+        # Bind app_layout helpers used by UI modules
+        self.create_card = lambda parent, title=None: app_layout.create_card(self, parent, title)
+        self.create_info_card = lambda parent: app_layout.create_info_card(self, parent)
+        self.create_class_card = lambda parent: app_layout.create_class_card(self, parent)
+        self.create_ai_card = lambda parent: app_layout.create_ai_card(self, parent)
+        self.create_shortcut_card = lambda parent: app_layout.create_shortcut_card(self, parent)
+        self.create_navigation = lambda parent: app_layout.create_navigation(self, parent)
+        self._on_sidebar_frame_configure = lambda e=None: app_layout.on_sidebar_frame_configure(self, e)
+        self._on_sidebar_canvas_configure = lambda e: app_layout.on_sidebar_canvas_configure(self, e)
+        self._on_sidebar_mousewheel = lambda e: app_layout.on_sidebar_mousewheel(self, e)
+        self._bind_sidebar_mousewheel = lambda widget: app_layout.bind_sidebar_mousewheel(self, widget)
+        self._refresh_sidebar_scrollregion = lambda: app_layout.refresh_sidebar_scrollregion(self)
+        self.get_theme_switch_label = lambda: app_layout.get_theme_switch_label(self)
+
+        # Bind keybinds helpers
+        self.create_help_icon = lambda parent: keybinds.create_help_icon(self, parent)
+        self._shortcut_items = lambda: keybinds.shortcut_items(self)
+        self.build_shortcut_text = lambda: keybinds.build_shortcut_text(self)
+        self.show_shortcut_tooltip = lambda widget: keybinds.show_shortcut_tooltip(self, widget)
+        self._show_tooltip_now = lambda widget: keybinds._show_tooltip_now(self, widget)
+        self.hide_shortcut_tooltip = lambda: keybinds.hide_shortcut_tooltip(self)
+
+        # Monitor bounds helper
+        self._get_widget_monitor_bounds = get_widget_monitor_bounds
+
+        # Bind common feature/controller helpers to instance to replace trivial passthroughs
+        self.use_official_yolo26n = lambda *a, **k: yolo_utils.use_official_yolo26n(self, *a, **k)
+        self._resolve_official_model_path = lambda *a, **k: yolo_utils._resolve_official_model_path(self, *a, **k)
+        self._resolve_custom_model_path = lambda raw_path: yolo_utils._resolve_custom_model_path(self, raw_path)
+        self.browse_detection_model = lambda *a, **k: yolo_utils.browse_detection_model(self, *a, **k)
+        self.pick_model_file = lambda forced_mode=None: yolo_utils.pick_model_file(self, forced_mode=forced_mode)
+
+        self._scan_available_cameras = lambda max_probe=6: camera_utils.scan_available_cameras(self, max_probe=max_probe)
+        self._get_camera_max_fps = lambda camera_index=0: camera_utils.get_camera_max_fps(self, camera_index=camera_index)
+        self._start_detect_video_stream = lambda source: camera_utils.start_detect_video_stream(self, source)
+        self._detect_tick_video = lambda: camera_utils._detect_tick_video(self)
+        self._stop_detect_stream = lambda: camera_utils.stop_detect_stream(self)
+
+        self._init_detect_report_logger = lambda source_kind, source_value, output_dir=None: report_utils.init_detect_report_logger(self, source_kind, source_value, output_dir=output_dir)
+        self._close_detect_report_logger = lambda: report_utils._close_detect_report_logger(self)
+        self._trigger_detect_report_generation = lambda csv_path: report_utils._trigger_detect_report_generation(self, csv_path)
+        self._append_detect_report_row = lambda image_name, result0, status, details: report_utils.append_detect_report_row(self, image_name, result0, status, details)
+        self._append_detect_report_row_once = lambda image_name, result0, status, details: report_utils.append_detect_report_row_once(self, image_name, result0, status, details)
+
+        self._configure_detect_golden_sample = lambda: golden_controller.configure_detect_golden_sample(self)
+        self._load_detect_background_cut_bundle = lambda golden_dir: golden_controller.load_detect_background_cut_bundle(self, golden_dir)
+        self._create_detect_golden_from_label_mode = lambda: golden_controller.create_detect_golden_from_label_mode(self)
+        self._finalize_golden_from_label_mode = lambda: golden_controller.finalize_golden_from_label_mode(self)
+        self._cancel_golden_capture_and_back_to_detect = lambda: golden_controller.cancel_golden_capture_and_back_to_detect(self)
+        self._cleanup_golden_capture_temp = lambda: golden_controller._cleanup_golden_capture_temp(self)
+        self._annotate_golden_image_label_style = lambda image_path, class_options: golden_controller.annotate_golden_image_label_style(self, image_path, class_options)
+        self._parse_yolo_label_file = lambda label_path: golden_controller.parse_yolo_label_file(label_path)
+        self._find_dataset_yaml_for_label = lambda label_path: golden_controller.find_dataset_yaml_for_label(label_path)
+        self._find_dataset_yaml_in_folder = lambda folder: golden_controller.find_dataset_yaml_in_folder(folder)
+        self._load_mapping_from_dataset_yaml = lambda yaml_path: golden_controller.load_mapping_from_dataset_yaml(yaml_path)
+        self._find_golden_id_config_in_folder = lambda folder: golden_controller.find_golden_id_config_in_folder(folder)
+        self._load_golden_id_config = lambda json_path: golden_controller.load_golden_id_config(json_path)
+        self._prompt_golden_id_classes = lambda class_mapping, parent=None: golden_controller.prompt_golden_id_classes(self, class_mapping, parent=parent)
+        self._write_golden_id_config = lambda folder, class_id, class_name, sub_id_class_id=None, sub_id_class_name=None: golden_controller.write_golden_id_config(folder, class_id, class_name, sub_id_class_id=sub_id_class_id, sub_id_class_name=sub_id_class_name)
+        self._pick_golden_rect_on_image = lambda image_path: golden_controller.pick_golden_rect_on_image(self, image_path)
+
+        self._should_use_background_cut_detection = lambda: detect_runtime.should_use_background_cut_detection(self)
+        self._cleanup_detect_cut_piece_temp = lambda remove_root=False: detect_runtime.cleanup_detect_cut_piece_temp(self, remove_root=remove_root)
+        self._ensure_detect_cut_piece_temp_root = lambda: detect_runtime.ensure_detect_cut_piece_temp_root(self)
+        self._write_cut_pieces_to_temp_folder = lambda pieces: detect_runtime.write_cut_pieces_to_temp_folder(self, pieces)
+        self._cut_piece_signature = lambda piece: detect_runtime.cut_piece_signature(self, piece)
+        self._filter_unseen_cut_pieces = lambda pieces: detect_runtime.filter_unseen_cut_pieces(self, pieces)
+        self._prepare_background_cut_detect_source = lambda source: detect_runtime.prepare_background_cut_detect_source(self, source)
+        self._select_primary_result_index = lambda results: detect_runtime.select_primary_result_index(results)
+        self._run_detect_inference = lambda source: detect_runtime.run_detect_inference(self, source)
+
+        self._render_detect_current_piece_result = lambda source_path: detect_mode.render_current_piece_result(self, source_path)
+        self._detect_render_image_index = lambda: detect_mode.detect_render_image_index(self)
+        self._render_detect_current_piece_result = lambda source_path: detect_mode.render_current_piece_result(self, source_path)
+        self._show_detect_plot = lambda plot_bgr: detect_mode.show_detect_plot(self, plot_bgr)
+        self._refresh_detect_image = lambda: detect_mode.refresh_detect_image(self)
+        self._detect_prev_image = lambda: detect_mode.detect_prev_image(self)
+        self._detect_next_image = lambda: detect_mode.detect_next_image(self)
+
+        self._get_easy_ocr_engine = lambda: ocr_utils.get_easy_ocr_engine(self)
+        self._get_preferred_ocr_engine = lambda: ocr_utils.get_preferred_ocr_engine(self)
+        self._extract_ocr_text_from_result = lambda result0, tgt_id, tgt_name: ocr_utils.extract_ocr_text_from_result(self, result0, tgt_id, tgt_name)
+        self._extract_ocr_id_from_result = lambda result0: ocr_utils.extract_ocr_id_from_result(self, result0)
+        self._extract_ocr_sub_id_from_result = lambda result0: ocr_utils.extract_ocr_sub_id_from_result(self, result0)
+
+        # project utils (module functions that don't expect `self`)
+        self.normalize_project_root = project_utils.normalize_project_root
+        self.find_yolo_project_root = project_utils.find_yolo_project_root
+        self._list_split_images_for_root = project_utils.list_split_images_for_root
+        self._glob_image_files = project_utils._glob_image_files
+        self._glob_label_files = project_utils._glob_label_files
+        self._existing_image_splits = project_utils.existing_image_splits
+        self.ensure_yolo_label_dirs = project_utils.ensure_yolo_label_dirs
+        self.diagnose_folder_structure = project_utils.diagnose_folder_structure
+        self.show_folder_diagnosis = lambda directory: project_utils.show_folder_diagnosis(self, directory)
+        self.load_images_folder_only = lambda directory: project_utils.load_images_folder_only(self, directory)
+        # Bind canvas geometry helpers
+        self.clamp_box = lambda box: canvas_utils.clamp_box(self, box)
+        self.normalize_angle_deg = canvas_utils.normalize_angle_deg
+        self.get_rect_angle_deg = canvas_utils.get_rect_angle_deg
+        self.set_rect_angle_deg = lambda rect, angle_deg: rect.__setitem__(slice(None), canvas_utils.set_rect_angle_deg(rect, angle_deg))
+        # Additional bound delegators for controllers and helpers
+        self._open_detect_workspace = lambda source_kind, source_value, output_dir=None: detect_mode.open_detect_workspace(self, source_kind, source_value, output_dir=output_dir)
+        self.rotate_selected_boxes = lambda delta_deg: label_mode.rotate_selected_boxes(self, delta_deg)
+        self._bbox_iou = lambda a, b: golden_controller.bbox_iou(a, b)
+        self._evaluate_golden_match = lambda result0: golden_controller.evaluate_golden_match(self, result0)
+        self._detect_class_counts = lambda result0: detect_runtime.detect_class_counts(result0)
+        self.rotate_point_around_center = canvas_utils.rotate_point_around_center
+        self.get_rotated_corners = canvas_utils.get_rotated_corners
+        self.rect_to_obb_norm = canvas_utils.rect_to_obb_norm
+        self.obb_norm_to_rect = lambda pts_norm, width, height, class_id: canvas_utils.obb_norm_to_rect(self, pts_norm, width, height, class_id)
+        self._point_in_rotated_box = canvas_utils.point_in_rotated_box
+        self.get_handles = lambda rect: canvas_utils.get_handles(self, rect)
+        # Bind widget creators
+        self.create_label = lambda parent, text="", **kw: widget_styles.create_label(self, parent, text, **kw)
+        self.create_bold_label = lambda parent, text="", **kw: widget_styles.create_bold_label(self, parent, text, **kw)
+        self.create_mono_label = lambda parent, text="", **kw: widget_styles.create_mono_label(self, parent, text, **kw)
+        self.create_textbox = lambda parent, **kw: widget_styles.create_textbox(self, parent, **kw)
+        self.create_combobox = lambda parent, **kw: widget_styles.create_combobox(self, parent, **kw)
+        self.create_entry = lambda parent, **kw: widget_styles.create_entry(self, parent, **kw)
+        # Bind file/path helpers
+        self._build_removed_path = lambda kind, src_path: file_utils.build_removed_path(self, kind, src_path)
+        self._unique_target_path = file_utils.unique_target_path
+        self._rotation_meta_path_for_label = file_utils.rotation_meta_path_for_label
+        self._read_rotation_meta_angles = lambda rot_meta_path: file_utils.read_rotation_meta_angles(self, rot_meta_path)
+        # Bind UI/layout delegators
+        self.setup_ui = lambda *a, **k: app_layout.setup_ui(self, *a, **k)
+        self.setup_toolbar = lambda *a, **k: app_layout.setup_toolbar(self, *a, **k)
+        self.setup_sidebar = lambda *a, **k: app_layout.setup_sidebar(self, *a, **k)
+        self.create_help_icon = lambda parent: keybinds.create_help_icon(self, parent)
+        self._shortcut_items = lambda: keybinds.shortcut_items(self)
+        self.build_shortcut_text = lambda: keybinds.build_shortcut_text(self)
+        self.show_shortcut_tooltip = lambda widget: keybinds.show_shortcut_tooltip(self, widget)
+        self._show_tooltip_now = lambda widget: keybinds._show_tooltip_now(self, widget)
+        self._get_widget_monitor_bounds = get_widget_monitor_bounds
+        self.hide_shortcut_tooltip = lambda: keybinds.hide_shortcut_tooltip(self)
+        self.create_card = lambda parent, title=None: app_layout.create_card(self, parent, title)
+        self.create_info_card = lambda parent: app_layout.create_info_card(self, parent)
+        self.create_class_card = lambda parent: app_layout.create_class_card(self, parent)
+        self.create_ai_card = lambda parent: app_layout.create_ai_card(self, parent)
+        self.create_shortcut_card = lambda parent: app_layout.create_shortcut_card(self, parent)
+        self.create_navigation = lambda parent: app_layout.create_navigation(self, parent)
+        # Bind overlay interaction delegators
+        self.render = lambda: overlay_interaction.render(self)
+        self.on_mouse_move = lambda e: overlay_interaction.on_mouse_move(self, e)
+        self.update_cursor_overlay = lambda: overlay_interaction.update_cursor_overlay(self)
+        self.on_mouse_down = lambda e: overlay_interaction.on_mouse_down(self, e)
+        self.on_mouse_down_right = lambda e: overlay_interaction.on_mouse_down_right(self, e)
+        self.on_mouse_drag = lambda e: overlay_interaction.on_mouse_drag(self, e)
+        self.on_mouse_up = lambda e: overlay_interaction.on_mouse_up(self, e)
+        self.on_mouse_up_right = lambda e: overlay_interaction.on_mouse_up_right(self, e)
+        self.paste_previous_labels = lambda ix, iy: overlay_interaction.paste_previous_labels(self, ix, iy)
+        self.on_zoom = lambda e: overlay_interaction.on_zoom(self, e)
+        self.on_canvas_resize = lambda e: overlay_interaction.on_canvas_resize(self, e)
+        self.fit_image_to_canvas = lambda: overlay_interaction.fit_image_to_canvas(self)
+        # Bind detect/label/project/image/yolo delegators
+        self.open_detect_workspace = lambda source_kind, source_value, output_dir=None: detect_mode.open_detect_workspace(self, source_kind, source_value, output_dir=output_dir)
+        self.remove_current_from_split = lambda: label_mode.remove_current_from_split(self)
+        self.restore_removed_file_by_name = lambda filename: label_mode.restore_removed_file_by_name(self, filename)
+        self.load_img = lambda: image_load.load_image(self)
+        self.save_current = lambda: label_mode.save_current(self)
+        self._reindex_dataset_labels_after_class_delete = lambda deleted_idx: label_mode._reindex_dataset_labels_after_class_delete(self, deleted_idx)
+        self.load_project_from_path = lambda directory, preferred_image=None, save_session=True: project_utils.load_project_from_path(self, directory, preferred_image=preferred_image, save_session=save_session)
+        self.load_project_root = lambda: project_utils.load_project_root(self)
+        self.load_split_data = lambda preferred_image=None: project_utils.load_split_data(self, preferred_image=preferred_image)
+        self._list_split_images = lambda split: project_utils.list_split_images(self.project_root, split)
+        self.autolabel_red = lambda: yolo_utils.autolabel_red(self)
+        self.run_yolo_detection = lambda: yolo_utils.run_yolo_detection(self)
+        self._is_cuda_kernel_compat_error = yolo_utils._is_cuda_kernel_compat_error
+        self._can_use_cuda_runtime = yolo_utils._can_use_cuda_runtime
+        self._auto_runtime_device = lambda allow_forced_cpu=False: yolo_utils._auto_runtime_device(self, allow_forced_cpu=allow_forced_cpu)
+        # Bind training_threading helpers
+        self.stop_training = lambda: training_threading.stop_training(self)
+        self._force_kill_training_if_alive = lambda proc: training_threading.force_kill_training_if_alive(self, proc)
+        self._append_training_log = lambda line: training_threading.append_training_log(self, line)
+        self._set_training_status = lambda running: training_threading.set_training_status(self, running)
+        self._set_training_progress = lambda current_epoch, total_epochs: training_threading.set_training_progress(self, current_epoch, total_epochs)
+        self._format_eta_seconds = lambda seconds_left: training_threading.format_eta_seconds(self, seconds_left)
+        self._set_training_eta = lambda eta_text: training_threading.set_training_eta(self, eta_text)
+        self._handle_training_output_line = lambda line: training_threading.handle_training_output_line(self, line)
+        self._run_training_subprocess = lambda cmd, workdir: training_threading.run_training_subprocess(self, cmd, workdir)
+        self._poll_training_queue = lambda: training_threading.poll_training_queue(self)
+
+        # Bind export utilities
+        self._iter_export_images = lambda: export_utils._iter_export_images(self)
+        self.export_all_by_selected_format = lambda: export_utils.export_all_by_selected_format(self)
+        self._export_all_yolo = lambda out_dir: export_utils._export_all_yolo(self, out_dir)
+        self._write_export_yolo_dataset_yaml = lambda out_dir, val_rel_path="images/train": export_utils._write_export_yolo_dataset_yaml(self, out_dir, val_rel_path=val_rel_path)
+        self._export_val_with_aug_for_val = lambda out_dir: export_utils._export_val_with_aug_for_val(self, out_dir)
+        self._export_all_json = lambda out_dir: export_utils._export_all_json(self, out_dir)
+
         self.setup_ui()
         self.bind_events()
         self.root.protocol("WM_DELETE_WINDOW", self.on_app_close)
@@ -418,86 +610,7 @@ class GeckoAI:
         candidates.sort(key=lambda item: (item[0], -item[1]))
         return candidates[0][1]
     
-    def setup_ui(self):
-        return app_layout.setup_ui(self)
-
-    def setup_toolbar(self):
-        return app_layout.setup_toolbar(self)
-
-    def setup_sidebar(self):
-        return app_layout.setup_sidebar(self)
-
-    def create_toolbar_button(self, parent, text, command, bg=None):
-        return ui_buttons.create_toolbar_button(
-            parent=parent,
-            text=text,
-            command=command,
-            bg=bg,
-            font_primary=self.font_primary,
-            theme=self.theme,
-            colors=COLORS,
-        )
-
-    def create_help_icon(self, parent):
-        return keybinds.create_help_icon(self, parent)
-
-    def _shortcut_items(self) -> list[tuple[str, str]]:
-        return keybinds.shortcut_items(self)
-
-    def build_shortcut_text(self):
-        return keybinds.build_shortcut_text(self)
-
-    def show_shortcut_tooltip(self, widget):
-        return keybinds.show_shortcut_tooltip(self, widget)
-
-    def _show_tooltip_now(self, widget):
-        return keybinds._show_tooltip_now(self, widget)
-
-    def _get_widget_monitor_bounds(self, widget):
-        return get_widget_monitor_bounds(widget)
-
-    def hide_shortcut_tooltip(self):
-        return keybinds.hide_shortcut_tooltip(self)
-
-    def create_toolbar_icon_button(self, parent, text, command, tooltip="", bg=None, fg=None, circular=False):
-        del tooltip
-        return ui_buttons.create_toolbar_icon_button(
-            parent=parent,
-            text=text,
-            command=command,
-            bg=bg,
-            fg=fg,
-            circular=circular,
-            theme=self.theme,
-            colors=COLORS,
-        )
-
-    def lighten_color(self, color):
-        return ui_buttons.lighten_color(color, COLORS)
-
-    def _on_sidebar_frame_configure(self, e=None):
-        return app_layout.on_sidebar_frame_configure(self, e)
-
-    def _on_sidebar_canvas_configure(self, e):
-        return app_layout.on_sidebar_canvas_configure(self, e)
-
-    def _on_sidebar_mousewheel(self, e):
-        return app_layout.on_sidebar_mousewheel(self, e)
-
-    def _bind_sidebar_mousewheel(self, widget):
-        return app_layout.bind_sidebar_mousewheel(self, widget)
-
-    def _refresh_sidebar_scrollregion(self) -> None:
-        return app_layout.refresh_sidebar_scrollregion(self)
-
-    def get_theme_switch_label(self):
-        return app_layout.get_theme_switch_label(self)
-
-    def is_accent_bg(self, bg):
-        return ui_buttons.is_accent_bg(bg, COLORS)
-
-    def toolbar_text_color(self, bg):
-        return ui_buttons.toolbar_text_color(bg, self.theme, COLORS)
+    
 
     def apply_theme(self, theme, rebuild=True):
         self.theme = theme
@@ -537,56 +650,6 @@ class GeckoAI:
             except Exception:
                 pass
             self._fullpage_overlay = None
-    
-    def create_card(self, parent, title=None):
-        return app_layout.create_card(self, parent, title)
-    
-    def create_info_card(self, parent):
-        return app_layout.create_info_card(self, parent)
-
-    
-    def create_class_card(self, parent):
-        return app_layout.create_class_card(self, parent)
-    
-    def create_ai_card(self, parent):
-        return app_layout.create_ai_card(self, parent)
-
-    
-    def create_shortcut_card(self, parent):
-        return app_layout.create_shortcut_card(self, parent)
-    
-    def create_navigation(self, parent):
-        return app_layout.create_navigation(self, parent)
-    
-    def create_primary_button(self, parent, text, command, bg=None):
-        return ui_buttons.create_primary_button(
-            parent=parent,
-            text=text,
-            command=command,
-            bg=bg,
-            font_primary=self.font_primary,
-            colors=COLORS,
-        )
-
-    def create_secondary_button(self, parent, text, command):
-        return ui_buttons.create_secondary_button(
-            parent=parent,
-            text=text,
-            command=command,
-            font_primary=self.font_primary,
-            colors=COLORS,
-        )
-    
-    def create_nav_button(self, parent, text, command, side, primary=False):
-        return ui_buttons.create_nav_button(
-            parent=parent,
-            text=text,
-            command=command,
-            side=side,
-            primary=primary,
-            font_bold=self.font_bold,
-            colors=COLORS,
-        )
     
     def toggle_language(self):
         self.lang = "en"
@@ -779,20 +842,6 @@ class GeckoAI:
         self.yolo_model = None
         self._loaded_model_key = None
 
-    def use_official_yolo26n(self) -> None:
-        return yolo_utils.use_official_yolo26n(self)
-
-    def _resolve_official_model_path(self) -> str:
-        return yolo_utils._resolve_official_model_path(self)
-
-    def _resolve_custom_model_path(self, raw_path: str) -> str:
-        return yolo_utils._resolve_custom_model_path(self, raw_path)
-
-    def browse_detection_model(self) -> None:
-        return yolo_utils.browse_detection_model(self)
-
-    def pick_model_file(self, forced_mode: str | None = None) -> bool:
-        return yolo_utils.pick_model_file(self, forced_mode=forced_mode)
 
     def show_app_mode_dialog(self, force: bool = False) -> None:
         window_pages.show_app_mode_dialog(self, COLORS, LANG_MAP, force=force)
@@ -822,22 +871,8 @@ class GeckoAI:
     ) -> tk.Frame:
         card = tk.Frame(wrap, bg=COLORS["bg_white"], bd=0, highlightthickness=0)
         card.place(relx=0.5, rely=0.5, anchor="center", width=width, height=height)
-        tk.Label(
-            card,
-            text=title,
-            font=self.font_title,
-            fg=COLORS["text_primary"],
-            bg=COLORS["bg_white"],
-            anchor="center",
-        ).pack(fill="x", padx=24, pady=(28, 8))
-        tk.Label(
-            card,
-            text=subtitle,
-            font=self.font_primary,
-            fg=COLORS["text_secondary"],
-            bg=COLORS["bg_white"],
-            anchor="center",
-        ).pack(fill="x", padx=24, pady=(0, 14))
+        self.create_bold_label(card, text=title, font=self.font_title, fg=COLORS["text_primary"], bg=COLORS["bg_white"], anchor="center").pack(fill="x", padx=24, pady=(28, 8))
+        self.create_label(card, text=subtitle, font=self.font_primary, fg=COLORS["text_secondary"], bg=COLORS["bg_white"], anchor="center").pack(fill="x", padx=24, pady=(0, 14))
         return card
 
     def show_detect_mode_page(self) -> None:
@@ -924,76 +959,6 @@ class GeckoAI:
             return
         self.show_detect_source_page()
 
-    def _scan_available_cameras(self, max_probe: int = 6) -> list[int]:
-        return camera_utils.scan_available_cameras(self, max_probe=max_probe)
-
-    def _get_camera_max_fps(self, camera_index: int = 0) -> float:
-        return camera_utils.get_camera_max_fps(self, camera_index=camera_index)
-
-    def _configure_detect_golden_sample(self) -> None:
-        return golden_controller.configure_detect_golden_sample(self)
-
-    def _load_detect_background_cut_bundle(self, golden_dir: str) -> dict[str, Any] | None:
-        return golden_controller.load_detect_background_cut_bundle(self, golden_dir)
-
-    def _create_detect_golden_from_label_mode(self) -> None:
-        return golden_controller.create_detect_golden_from_label_mode(self)
-
-    def _finalize_golden_from_label_mode(self) -> None:
-        return golden_controller.finalize_golden_from_label_mode(self)
-
-    def _cancel_golden_capture_and_back_to_detect(self) -> None:
-        return golden_controller.cancel_golden_capture_and_back_to_detect(self)
-
-    def _cleanup_golden_capture_temp(self) -> None:
-        return golden_controller._cleanup_golden_capture_temp(self)
-
-    def _annotate_golden_image_label_style(self, image_path: str, class_options: list[str]) -> list[dict[str, Any]] | None:
-        return golden_controller.annotate_golden_image_label_style(self, image_path, class_options)
-
-    def _parse_yolo_label_file(self, label_path: str) -> list[tuple[int, tuple[float, float, float, float]]]:
-        return golden_controller.parse_yolo_label_file(label_path)
-
-    def _find_dataset_yaml_for_label(self, label_path: str) -> str | None:
-        return golden_controller.find_dataset_yaml_for_label(label_path)
-
-    def _find_dataset_yaml_in_folder(self, folder: str) -> str | None:
-        return golden_controller.find_dataset_yaml_in_folder(folder)
-
-    def _load_mapping_from_dataset_yaml(self, yaml_path: str) -> dict[int, str]:
-        return golden_controller.load_mapping_from_dataset_yaml(yaml_path)
-
-    def _find_golden_id_config_in_folder(self, folder: str) -> str | None:
-        return golden_controller.find_golden_id_config_in_folder(folder)
-
-    def _load_golden_id_config(self, json_path: str | None) -> dict[str, Any] | None:
-        return golden_controller.load_golden_id_config(json_path)
-
-    def _prompt_golden_id_classes(
-        self,
-        class_mapping: dict[int, str],
-        parent: Any = None,
-    ) -> tuple[tuple[int, str] | None, tuple[int, str] | None]:
-        return golden_controller.prompt_golden_id_classes(self, class_mapping, parent=parent)
-
-    def _write_golden_id_config(
-        self,
-        folder: str,
-        class_id: int | None,
-        class_name: str | None,
-        sub_id_class_id: int | None = None,
-        sub_id_class_name: str | None = None,
-    ) -> str:
-        return golden_controller.write_golden_id_config(
-            folder,
-            class_id,
-            class_name,
-            sub_id_class_id=sub_id_class_id,
-            sub_id_class_name=sub_id_class_name,
-        )
-
-    def _pick_golden_rect_on_image(self, image_path: str) -> tuple[float, float, float, float] | None:
-        return golden_controller.pick_golden_rect_on_image(self, image_path)
 
     def _start_detect_from_setup(self) -> None:
         if not self.detect_model_path_var.get().strip():
@@ -1091,14 +1056,7 @@ class GeckoAI:
         card = tk.Frame(overlay, bg=COLORS["bg_white"], bd=0, highlightthickness=0)
         card.place(relx=0.5, rely=0.5, anchor="center", width=520, height=260)
 
-        tk.Label(
-            card,
-            text="Choose detection source",
-            bg=COLORS["bg_white"],
-            fg=COLORS["text_primary"],
-            font=self.font_title,
-            anchor="center",
-        ).pack(fill="x", padx=20, pady=(24, 16))
+        self.create_bold_label(card, text="Choose detection source", font=self.font_title, fg=COLORS["text_primary"], bg=COLORS["bg_white"], anchor="center").pack(fill="x", padx=20, pady=(24, 16))
 
         def use_camera() -> None:
             result["kind"] = "camera"
@@ -1220,20 +1178,7 @@ class GeckoAI:
         except Exception:
             return False
 
-    def _open_detect_workspace(self, source_kind: str, source_value: Any, output_dir: str | None = None) -> None:
-        return detect_controller.open_detect_workspace(self, source_kind, source_value, output_dir=output_dir)
-
-    def _init_detect_report_logger(self, source_kind: str, source_value: Any, output_dir: str | None = None) -> None:
-        return report_utils.init_detect_report_logger(self, source_kind, source_value, output_dir=output_dir)
-
-    def _close_detect_report_logger(self) -> None:
-        return report_utils._close_detect_report_logger(self)
-
-    def _resolve_detection_report_generator_script(self) -> str | None:
-        return report_utils._resolve_detection_report_generator_script()
-
-    def _trigger_detect_report_generation(self, csv_path: str) -> None:
-        return report_utils._trigger_detect_report_generation(self, csv_path)
+    
 
     def _set_detect_verdict(self, status: str | None, details: str) -> None:
         if self.detect_run_mode_var.get().strip().lower() != "golden":
@@ -1254,83 +1199,13 @@ class GeckoAI:
             if self._detect_verdict_label is not None:
                 self._detect_verdict_label.config(fg=COLORS["text_secondary"])
 
-    def _bbox_iou(self, a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
-        return golden_controller.bbox_iou(a, b)
-
-    def _evaluate_golden_match(self, result0: Any) -> tuple[str | None, str]:
-        return golden_controller.evaluate_golden_match(self, result0)
-
-    def _get_easy_ocr_engine(self) -> Any:
-        return ocr_utils.get_easy_ocr_engine(self)
-
-    def _get_preferred_ocr_engine(self) -> tuple[str | None, Any]:
-        return ocr_utils.get_preferred_ocr_engine(self)
-
-    def _extract_ocr_text_from_result(
-        self,
-        result0: Any,
-        tgt_id: int | None,
-        tgt_name: str,
-    ) -> str:
-        return ocr_utils.extract_ocr_text_from_result(self, result0, tgt_id, tgt_name)
-
-    def _extract_ocr_id_from_result(self, result0: Any) -> str:
-        return ocr_utils.extract_ocr_id_from_result(self, result0)
-
-    def _extract_ocr_sub_id_from_result(self, result0: Any) -> str:
-        return ocr_utils.extract_ocr_sub_id_from_result(self, result0)
-
-    def _append_detect_report_row(self, image_name: str, result0: Any, status: str | None, details: str) -> None:
-        return report_utils.append_detect_report_row(self, image_name, result0, status, details)
-
-    def _append_detect_report_row_once(self, image_name: str, result0: Any, status: str | None, details: str) -> None:
-        return report_utils.append_detect_report_row_once(self, image_name, result0, status, details)
-
+    
+        
     def _exit_detect_workspace_to_source(self) -> None:
         self._stop_detect_stream()
         self._show_detect_settings_page_for_current_source()
 
-    def _start_detect_video_stream(self, source: Any) -> None:
-        return camera_utils.start_detect_video_stream(self, source)
-
-    def _detect_tick_video(self) -> None:
-        return camera_utils._detect_tick_video(self)
-
-    def _should_use_background_cut_detection(self) -> bool:
-        return detect_runtime.should_use_background_cut_detection(self)
-
-    def _cleanup_detect_cut_piece_temp(self, remove_root: bool = False) -> None:
-        return detect_runtime.cleanup_detect_cut_piece_temp(self, remove_root=remove_root)
-
-    def _ensure_detect_cut_piece_temp_root(self) -> str:
-        return detect_runtime.ensure_detect_cut_piece_temp_root(self)
-
-    def _write_cut_pieces_to_temp_folder(self, pieces: list[np.ndarray]) -> str:
-        return detect_runtime.write_cut_pieces_to_temp_folder(self, pieces)
-
-    def _cut_piece_signature(self, piece: np.ndarray) -> str:
-        return detect_runtime.cut_piece_signature(self, piece)
-
-    def _filter_unseen_cut_pieces(self, pieces: list[np.ndarray]) -> list[np.ndarray]:
-        return detect_runtime.filter_unseen_cut_pieces(self, pieces)
-
-    def _prepare_background_cut_detect_source(self, source: Any) -> Any:
-        return detect_runtime.prepare_background_cut_detect_source(self, source)
-
-    def _select_primary_result_index(self, results: list[Any]) -> int:
-        return detect_runtime.select_primary_result_index(results)
-
-    def _run_detect_inference(self, source: Any) -> Any:
-        return detect_runtime.run_detect_inference(self, source)
-
-    def _render_detect_current_piece_result(self, source_path: str) -> None:
-        return detect_controller.render_current_piece_result(self, source_path)
-
-    def _detect_render_image_index(self) -> None:
-        return detect_controller.detect_render_image_index(self)
-
-    def _detect_class_counts(self, result0: Any) -> dict[str, int]:
-        return detect_runtime.detect_class_counts(result0)
+    
 
     def _update_detect_class_panel(self, result0: Any) -> None:
         if self._detect_class_listbox is None:
@@ -1349,21 +1224,6 @@ class GeckoAI:
             return
         for cls_name in sorted(counts.keys()):
             self._detect_class_listbox.insert(tk.END, f"{cls_name} x{counts[cls_name]}")
-
-    def _show_detect_plot(self, plot_bgr: Any) -> None:
-        return detect_controller.show_detect_plot(self, plot_bgr)
-
-    def _refresh_detect_image(self) -> None:
-        return detect_controller.refresh_detect_image(self)
-
-    def _stop_detect_stream(self) -> None:
-        return camera_utils.stop_detect_stream(self)
-
-    def _detect_prev_image(self) -> None:
-        return detect_controller.detect_prev_image(self)
-
-    def _detect_next_image(self) -> None:
-        return detect_controller.detect_next_image(self)
 
     def show_startup_source_dialog(
         self,
@@ -1551,37 +1411,7 @@ class GeckoAI:
         finally:
             self._folder_dialog_open = False
             self.logger.info("=== startup_choose_images_folder END ===")
-
-    def normalize_project_root(self, directory: str) -> str:
-        return project_utils.normalize_project_root(directory)
-
-    def find_yolo_project_root(self, directory: str) -> str | None:
-        return project_utils.find_yolo_project_root(directory)
-
-    def _list_split_images_for_root(self, project_root: str, split: str) -> list[str]:
-        return project_utils.list_split_images_for_root(project_root, split)
-
-    def _glob_image_files(self, folder_path: str, include_bmp: bool = False) -> list[str]:
-        return project_utils._glob_image_files(folder_path, include_bmp=include_bmp)
-
-    def _glob_label_files(self, project_root: str) -> list[str]:
-        return project_utils._glob_label_files(project_root)
-
-    def _existing_image_splits(self, project_root: str) -> list[str]:
-        return project_utils.existing_image_splits(project_root)
-
-    def ensure_yolo_label_dirs(self, project_root: str) -> None:
-        return project_utils.ensure_yolo_label_dirs(project_root)
-
-    def diagnose_folder_structure(self, directory: str) -> dict[str, Any]:
-        return project_utils.diagnose_folder_structure(directory)
-
-    def show_folder_diagnosis(self, directory: str) -> None:
-        return project_utils.show_folder_diagnosis(self, directory)
-
-    def load_images_folder_only(self, directory: str) -> None:
-        return project_utils.load_images_folder_only(self, directory)
-
+        
     def on_app_close(self) -> None:
         self._stop_detect_stream()
         try:
@@ -1599,37 +1429,7 @@ class GeckoAI:
         self.save_session_state()
         self.root.destroy()
 
-    def render(self) -> None:
-        return overlay_interaction.render(self)
-    
     # ==================== Mouse Interaction ====================
-    
-    def on_mouse_move(self, e: Any) -> None:
-        return overlay_interaction.on_mouse_move(self, e)
-    
-    def update_cursor_overlay(self) -> None:
-        return overlay_interaction.update_cursor_overlay(self)
-
-    def on_mouse_down(self, e):
-        return overlay_interaction.on_mouse_down(self, e)
-
-    def on_mouse_down_right(self, e):
-        return overlay_interaction.on_mouse_down_right(self, e)
-    
-    def on_mouse_drag(self, e):
-        return overlay_interaction.on_mouse_drag(self, e)
-    
-    def on_mouse_up(self, e):
-        return overlay_interaction.on_mouse_up(self, e)
-
-    def on_mouse_up_right(self, e):
-        return overlay_interaction.on_mouse_up_right(self, e)
-
-    def paste_previous_labels(self, ix: float, iy: float) -> None:
-        return overlay_interaction.paste_previous_labels(self, ix, iy)
-    
-    def on_zoom(self, e):
-        return overlay_interaction.on_zoom(self, e)
     
     # ==================== Class Operations ====================
     
@@ -1646,8 +1446,7 @@ class GeckoAI:
                 self.rects[idx][4] = new_cid
             self.render()
 
-    def rotate_selected_boxes(self, delta_deg: float) -> None:
-        return label_controller.rotate_selected_boxes(self, delta_deg)
+    
     
     def edit_classes_table(self):
         L = LANG_MAP[self.lang]
@@ -1746,56 +1545,17 @@ class GeckoAI:
         btn_frame = tk.Frame(win, bg=COLORS["bg_light"])
         btn_frame.pack(fill="x", padx=20, pady=10)
         
-        tk.Button(
-            btn_frame,
-            text=L["add"],
-            command=add,
-            bg=COLORS["success"],
-            fg=COLORS["text_white"],
-            font=self.font_primary,
-            relief="flat",
-            padx=20,
-            pady=10
-        ).pack(side="left", expand=True, fill="x", padx=(0, 5))
+        self.create_primary_button(btn_frame, text=L["add"], command=add, bg=COLORS["success"]).pack(side="left", expand=True, fill="x", padx=(0, 5))
         
-        tk.Button(
-            btn_frame,
-            text=L["rename"],
-            command=rename,
-            bg=COLORS["warning"],
-            fg=COLORS["text_white"],
-            font=self.font_primary,
-            relief="flat",
-            padx=20,
-            pady=10
-        ).pack(side="left", expand=True, fill="x", padx=(5, 0))
+        self.create_primary_button(btn_frame, text=L["rename"], command=rename, bg=COLORS["warning"]).pack(side="left", expand=True, fill="x", padx=(5, 0))
 
-        tk.Button(
-            btn_frame,
-            text=L.get("delete_class", "Delete Class"),
-            command=delete_class,
-            bg=COLORS["danger"],
-            fg=COLORS["text_white"],
-            font=self.font_primary,
-            relief="flat",
-            padx=20,
-            pady=10
-        ).pack(side="left", expand=True, fill="x", padx=(5, 0))
+        self.create_primary_button(btn_frame, text=L.get("delete_class", "Delete Class"), command=delete_class, bg=COLORS["danger"]).pack(side="left", expand=True, fill="x", padx=(5, 0))
         
-        tk.Button(
-            win,
-            text=L["apply"],
-            command=lambda: [
-                self._refresh_class_dropdown(),
-                self.render(),
-                win.destroy()
-            ],
-            bg=COLORS["primary"],
-            fg=COLORS["text_white"],
-            font=self.font_bold,
-            relief="flat",
-            pady=12
-        ).pack(fill="x", padx=20, pady=(0, 20))
+        self.create_primary_button(win, text=L["apply"], command=lambda: [
+            self._refresh_class_dropdown(),
+            self.render(),
+            win.destroy()
+        ], bg=COLORS["primary"]).pack(fill="x", padx=20, pady=(0, 20))
         
         tree.bind("<Double-1>", on_double_click)
         refresh()
@@ -1826,33 +1586,13 @@ class GeckoAI:
             current_idx = self.combo_cls.current()
             current_name = f"Multiple ({len(selected)} boxes)"
 
-        tk.Label(
-            win,
-            text=f"{LANG_MAP[self.lang]['current']}: {current_name}",
-            font=self.font_primary,
-            fg=COLORS["text_secondary"],
-            bg=COLORS["bg_light"],
-            anchor="w"
-        ).pack(fill="x", padx=20, pady=(20, 6))
+        self.create_label(win, text=f"{LANG_MAP[self.lang]['current']}: {current_name}", font=self.font_primary, fg=COLORS["text_secondary"], bg=COLORS["bg_light"], anchor="w").pack(fill="x", padx=20, pady=(20, 6))
 
-        tk.Label(
-            win,
-            text=LANG_MAP[self.lang]["to"],
-            font=self.font_primary,
-            fg=COLORS["text_secondary"],
-            bg=COLORS["bg_light"],
-            anchor="w"
-        ).pack(fill="x", padx=20, pady=(10, 6))
+        self.create_label(win, text=LANG_MAP[self.lang]["to"], font=self.font_primary, fg=COLORS["text_secondary"], bg=COLORS["bg_light"], anchor="w").pack(fill="x", padx=20, pady=(10, 6))
 
         to_default = self.class_names[current_idx] if 0 <= current_idx < len(self.class_names) else self.class_names[0]
         to_var = tk.StringVar(value=to_default)
-        ttk.Combobox(
-            win,
-            values=self.class_names,
-            textvariable=to_var,
-            state="readonly",
-            font=self.font_primary
-        ).pack(fill="x", padx=20)
+        self.create_combobox(win, values=self.class_names, textvariable=to_var, state="readonly", font=self.font_primary).pack(fill="x", padx=20)
 
         def apply_change():
             to_name = to_var.get()
@@ -1873,16 +1613,7 @@ class GeckoAI:
             self.render()
             win.destroy()
 
-        tk.Button(
-            win,
-            text=LANG_MAP[self.lang]["apply"],
-            command=apply_change,
-            bg=COLORS["primary"],
-            fg=COLORS["text_white"],
-            font=self.font_bold,
-            relief="flat",
-            pady=10
-        ).pack(fill="x", padx=20, pady=(20, 16))
+        self.create_primary_button(win, text=LANG_MAP[self.lang]["apply"], command=apply_change, bg=COLORS["primary"]).pack(fill="x", padx=20, pady=(20, 16))
 
     def clear_current_labels(self):
         if not self.rects:
@@ -1892,36 +1623,9 @@ class GeckoAI:
         self.delete_selected()
 
     
-    def _build_removed_path(self, kind, src_path):
-        ext = os.path.splitext(src_path)[1]
-        base = os.path.splitext(os.path.basename(src_path))[0]
-        dst_dir = os.path.join(self.project_root, "removed", self.current_split, kind)
-        os.makedirs(dst_dir, exist_ok=True)
-        dst_path = os.path.join(dst_dir, f"{base}{ext}")
-        if not os.path.exists(dst_path):
-            return dst_path
+    
 
-        i = 1
-        while True:
-            candidate = os.path.join(dst_dir, f"{base}_{i}{ext}")
-            if not os.path.exists(candidate):
-                return candidate
-            i += 1
-
-    def _unique_target_path(self, target_path):
-        if not os.path.exists(target_path):
-            return target_path
-        folder = os.path.dirname(target_path)
-        base, ext = os.path.splitext(os.path.basename(target_path))
-        i = 1
-        while True:
-            candidate = os.path.join(folder, f"{base}_{i}{ext}")
-            if not os.path.exists(candidate):
-                return candidate
-            i += 1
-
-    def remove_current_from_split(self):
-        return label_controller.remove_current_from_split(self)
+    
 
     def open_restore_removed_dialog(self):
         if not self.project_root:
@@ -1951,14 +1655,7 @@ class GeckoAI:
         win.geometry("520x420")
         win.configure(bg=COLORS["bg_light"])
 
-        tk.Label(
-            win,
-            text=LANG_MAP[self.lang].get("restore_select", "Select a frame to restore:"),
-            font=self.font_primary,
-            fg=COLORS["text_secondary"],
-            bg=COLORS["bg_light"],
-            anchor="w"
-        ).pack(fill="x", padx=16, pady=(16, 8))
+        self.create_label(win, text=LANG_MAP[self.lang].get("restore_select", "Select a frame to restore:"), font=self.font_primary, fg=COLORS["text_secondary"], bg=COLORS["bg_light"], anchor="w").pack(fill="x", padx=16, pady=(16, 8))
 
         list_wrap = tk.Frame(win, bg=COLORS["bg_light"])
         list_wrap.pack(fill="both", expand=True, padx=16, pady=(0, 8))
@@ -1992,24 +1689,9 @@ class GeckoAI:
             bg=COLORS["success"]
         ).pack(fill="x", padx=16, pady=(0, 16))
 
-    def restore_removed_file_by_name(self, filename):
-        return label_controller.restore_removed_file_by_name(self, filename)
-
-    def load_img(self) -> None:
-        from ai_labeller.features import image_load
-        return image_load.load_image(self)
     
-    def save_current(self) -> None:
-        return label_controller.save_current(self)
 
-    def _reindex_dataset_labels_after_class_delete(self, deleted_idx: int) -> None:
-        return label_controller._reindex_dataset_labels_after_class_delete(self, deleted_idx)
     
-    def load_project_from_path(self, directory, preferred_image=None, save_session=True):
-        return project_utils.load_project_from_path(self, directory, preferred_image=preferred_image, save_session=save_session)
-
-    def load_project_root(self):
-        return project_utils.load_project_root(self)
     
     def on_split_change(self, e=None):
         if self.project_root:
@@ -2018,32 +1700,7 @@ class GeckoAI:
             self.load_split_data()
             self.save_session_state()
     
-    def load_split_data(self, preferred_image=None):
-        return project_utils.load_split_data(self, preferred_image=preferred_image)
-
-    def _list_split_images(self, split: str) -> list[str]:
-        return project_utils.list_split_images(self.project_root, split)
     
-    def autolabel_red(self) -> None:
-        return yolo_utils.autolabel_red(self)
-    
-    def run_yolo_detection(self):
-        return yolo_utils.run_yolo_detection(self)
-
-    def _is_cuda_kernel_compat_error(self, exc: BaseException) -> bool:
-        return yolo_utils._is_cuda_kernel_compat_error(exc)
-
-    def _can_use_cuda_runtime(self) -> bool:
-        return yolo_utils._can_use_cuda_runtime()
-
-    def _auto_runtime_device(self, allow_forced_cpu: bool = True) -> str:
-        return yolo_utils._auto_runtime_device(self, allow_forced_cpu=allow_forced_cpu)
-
-    def _list_split_labeled_images_for_root(self, project_root: str, split: str) -> list[str]:
-        return project_utils._list_split_labeled_images_for_root(project_root, split)
-
-    def _list_flat_labeled_images_for_root(self, project_root: str) -> list[str]:
-        return project_utils._list_flat_labeled_images_for_root(project_root)
 
     def _write_training_dataset_files(
         self,
@@ -2105,53 +1762,21 @@ class GeckoAI:
         outer = tk.Frame(win, bg=COLORS["bg_white"])
         outer.pack(fill="both", expand=True, padx=12, pady=12)
 
-        self.lbl_train_status = tk.Label(
-            outer,
-            text=f"{LANG_MAP[self.lang].get('train_status', 'Status')}: {LANG_MAP[self.lang].get('train_idle', 'Idle')}",
-            font=self.font_primary,
-            fg=COLORS["text_secondary"],
-            bg=COLORS["bg_white"],
-            anchor="w",
-        )
-        self.lbl_train_status.pack(fill="x")
+        _lbl = self.create_label(outer, text=f"{LANG_MAP[self.lang].get('train_status', 'Status')}: {LANG_MAP[self.lang].get('train_idle', 'Idle')}", font=self.font_primary, fg=COLORS["text_secondary"], bg=COLORS["bg_white"], anchor="w")
+        _lbl.pack(fill="x")
+        self.lbl_train_status = _lbl
 
-        self.lbl_train_progress = tk.Label(
-            outer,
-            text=f"{LANG_MAP[self.lang].get('train_progress', 'Progress')}: -",
-            font=self.font_primary,
-            fg=COLORS["text_secondary"],
-            bg=COLORS["bg_white"],
-            anchor="w",
-        )
-        self.lbl_train_progress.pack(fill="x")
+        _lbl = self.create_label(outer, text=f"{LANG_MAP[self.lang].get('train_progress', 'Progress')}: -", font=self.font_primary, fg=COLORS["text_secondary"], bg=COLORS["bg_white"], anchor="w")
+        _lbl.pack(fill="x")
+        self.lbl_train_progress = _lbl
 
-        self.lbl_train_eta = tk.Label(
-            outer,
-            text=f"{LANG_MAP[self.lang].get('train_eta', 'ETA')}: -",
-            font=self.font_primary,
-            fg=COLORS["text_secondary"],
-            bg=COLORS["bg_white"],
-            anchor="w",
-        )
-        self.lbl_train_eta.pack(fill="x", pady=(0, 6))
+        _lbl = self.create_label(outer, text=f"{LANG_MAP[self.lang].get('train_eta', 'ETA')}: -", font=self.font_primary, fg=COLORS["text_secondary"], bg=COLORS["bg_white"], anchor="w")
+        _lbl.pack(fill="x", pady=(0, 6))
+        self.lbl_train_eta = _lbl
 
-        tk.Label(
-            outer,
-            text=LANG_MAP[self.lang].get("train_command", "Command"),
-            font=self.font_primary,
-            fg=COLORS["text_secondary"],
-            bg=COLORS["bg_white"],
-            anchor="w",
-        ).pack(fill="x")
+        self.create_label(outer, text=LANG_MAP[self.lang].get("train_command", "Command"), font=self.font_primary, fg=COLORS["text_secondary"], bg=COLORS["bg_white"], anchor="w").pack(fill="x")
 
-        self.entry_train_cmd = tk.Entry(
-            outer,
-            textvariable=self.train_command_var,
-            font=self.font_mono,
-            state="readonly",
-            readonlybackground=COLORS["bg_light"],
-            fg=COLORS["text_primary"],
-        )
+        self.entry_train_cmd = self.create_entry(outer, textvariable=self.train_command_var, font=self.font_mono, state="readonly", readonlybackground=COLORS["bg_light"], fg=COLORS["text_primary"])
         self.entry_train_cmd.pack(fill="x", pady=(0, 6))
 
         stop_row = tk.Frame(outer, bg=COLORS["bg_white"])
@@ -2206,35 +1831,7 @@ class GeckoAI:
 
         win.protocol("WM_DELETE_WINDOW", on_close)
 
-    def stop_training(self) -> None:
-        return training_threading.stop_training(self)
-
-    def _force_kill_training_if_alive(self, proc: subprocess.Popen[str] | None) -> None:
-        return training_threading.force_kill_training_if_alive(self, proc)
-
-    def _append_training_log(self, line: str) -> None:
-        return training_threading.append_training_log(self, line)
-
-    def _set_training_status(self, running: bool) -> None:
-        return training_threading.set_training_status(self, running)
-
-    def _set_training_progress(self, current_epoch: int, total_epochs: int) -> None:
-        return training_threading.set_training_progress(self, current_epoch, total_epochs)
-
-    def _format_eta_seconds(self, seconds_left: float) -> str:
-        return training_threading.format_eta_seconds(self, seconds_left)
-
-    def _set_training_eta(self, eta_text: str) -> None:
-        return training_threading.set_training_eta(self, eta_text)
-
-    def _handle_training_output_line(self, line: str) -> None:
-        return training_threading.handle_training_output_line(self, line)
-
-    def _run_training_subprocess(self, cmd: list[str], workdir: str) -> None:
-        return training_threading.run_training_subprocess(self, cmd, workdir)
-
-    def _poll_training_queue(self) -> None:
-        return training_threading.poll_training_queue(self)
+    
 
     def _resolve_yolo_cli(self) -> str:
         py_dir = os.path.dirname(sys.executable)
@@ -2259,14 +1856,7 @@ class GeckoAI:
         card = tk.Frame(overlay, bg=COLORS["bg_white"], bd=0, highlightthickness=0)
         card.place(relx=0.5, rely=0.5, anchor="center", width=560, height=320)
 
-        tk.Label(
-            card,
-            text="Choose training weight source",
-            font=self.font_title,
-            fg=COLORS["text_primary"],
-            bg=COLORS["bg_white"],
-            anchor="center",
-        ).pack(fill="x", padx=20, pady=(24, 18))
+        self.create_bold_label(card, text="Choose training weight source", font=self.font_title, fg=COLORS["text_primary"], bg=COLORS["bg_white"], anchor="center").pack(fill="x", padx=20, pady=(24, 18))
 
         def choose_official() -> None:
             result["choice"] = "official"
@@ -2352,35 +1942,15 @@ class GeckoAI:
         card = tk.Frame(overlay, bg=COLORS["bg_white"], bd=0, highlightthickness=0)
         card.place(relx=0.5, rely=0.5, anchor="center", width=560, height=460)
 
-        tk.Label(
-            card,
-            text="Training Settings",
-            font=self.font_title,
-            fg=COLORS["text_primary"],
-            bg=COLORS["bg_white"],
-            anchor="center",
-        ).pack(fill="x", padx=20, pady=(20, 14))
+        self.create_bold_label(card, text="Training Settings", font=self.font_title, fg=COLORS["text_primary"], bg=COLORS["bg_white"], anchor="center").pack(fill="x", padx=20, pady=(20, 14))
 
         form = tk.Frame(card, bg=COLORS["bg_white"])
         form.pack(fill="x", padx=28, pady=(0, 10))
 
         def add_combo(row: int, label: str, values: list[str], default: str) -> tk.StringVar:
-            tk.Label(
-                form,
-                text=label,
-                font=self.font_primary,
-                fg=COLORS["text_secondary"],
-                bg=COLORS["bg_white"],
-                anchor="w",
-            ).grid(row=row, column=0, sticky="w", pady=(0, 8))
+            self.create_label(form, text=label, font=self.font_primary, fg=COLORS["text_secondary"], bg=COLORS["bg_white"], anchor="w").grid(row=row, column=0, sticky="w", pady=(0, 8))
             var = tk.StringVar(value=default)
-            ttk.Combobox(
-                form,
-                textvariable=var,
-                values=values,
-                state="readonly",
-                font=self.font_primary,
-            ).grid(row=row, column=1, sticky="ew", padx=(12, 0), pady=(0, 8))
+            self.create_combobox(form, textvariable=var, values=values, state="readonly", font=self.font_primary).grid(row=row, column=1, sticky="ew", padx=(12, 0), pady=(0, 8))
             return var
 
         form.grid_columnconfigure(1, weight=1)
@@ -2404,22 +1974,8 @@ class GeckoAI:
         custom_row = tk.Frame(form, bg=COLORS["bg_white"])
         custom_row.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         custom_row.grid_columnconfigure(1, weight=1)
-        tk.Label(
-            custom_row,
-            text="Custom Weight",
-            font=self.font_primary,
-            fg=COLORS["text_secondary"],
-            bg=COLORS["bg_white"],
-            anchor="w",
-        ).grid(row=0, column=0, sticky="w")
-        custom_entry = tk.Entry(
-            custom_row,
-            textvariable=custom_weight_var,
-            font=self.font_mono,
-            state="readonly",
-            readonlybackground=COLORS["bg_light"],
-            fg=COLORS["text_primary"],
-        )
+        self.create_label(custom_row, text="Custom Weight", font=self.font_primary, fg=COLORS["text_secondary"], bg=COLORS["bg_white"], anchor="w").grid(row=0, column=0, sticky="w")
+        custom_entry = self.create_entry(custom_row, textvariable=custom_weight_var, font=self.font_mono, state="readonly", readonlybackground=COLORS["bg_light"], fg=COLORS["text_primary"])
         custom_entry.grid(row=0, column=1, sticky="ew", padx=(12, 8))
 
         def browse_custom_weight() -> None:
@@ -2522,24 +2078,6 @@ class GeckoAI:
 
     def start_training_from_labels(self) -> None:
         training_runner.start_training_from_labels(self, has_yolo=HAS_YOLO)
-
-    def _iter_export_images(self) -> list[tuple[str, str, str]]:
-        return export_utils._iter_export_images(self)
-
-    def export_all_by_selected_format(self) -> None:
-        return export_utils.export_all_by_selected_format(self)
-
-    def _export_all_yolo(self, out_dir: str) -> int:
-        return export_utils._export_all_yolo(self, out_dir)
-
-    def _write_export_yolo_dataset_yaml(self, out_dir: str, val_rel_path: str = "images/train") -> None:
-        return export_utils._write_export_yolo_dataset_yaml(self, out_dir, val_rel_path=val_rel_path)
-
-    def _export_val_with_aug_for_val(self, out_dir: str) -> int:
-        return export_utils._export_val_with_aug_for_val(self, out_dir)
-
-    def _export_all_json(self, out_dir: str) -> int:
-        return export_utils._export_all_json(self, out_dir)
 
     def export_golden_folder(self) -> None:
         if not self.project_root:
@@ -2675,83 +2213,8 @@ class GeckoAI:
         messagebox.showinfo("Export", "COCO export will be implemented.")
     
     # ==================== Geometry ====================
-    
-    def clamp_box(self, box):
-        if not self.img_pil:
-            return box
-        return geom.clamp_box(box, self.img_pil.width, self.img_pil.height)
-
     def normalize_angle_deg(self, angle_deg: float) -> float:
-        return geom.normalize_angle_deg(angle_deg)
-
-    def get_rect_angle_deg(self, rect: list[float]) -> float:
-        return geom.get_rect_angle_deg(rect)
-
-    def set_rect_angle_deg(self, rect: list[float], angle_deg: float) -> None:
-        new = geom.set_rect_angle_deg(rect, angle_deg)
-        rect[:] = new
-
-    def rotate_point_around_center(
-        self,
-        x: float,
-        y: float,
-        cx: float,
-        cy: float,
-        angle_deg: float,
-    ) -> tuple[float, float]:
-        return geom.rotate_point_around_center(x, y, cx, cy, angle_deg)
-
-    def get_rotated_corners(self, rect: list[float]) -> list[tuple[float, float]]:
-        return geom.get_rotated_corners(rect)
-
-    def rect_to_obb_norm(self, rect: list[float], width: float, height: float) -> list[float]:
-        return geom.rect_to_obb_norm(rect, width, height)
-
-    def obb_norm_to_rect(self, pts_norm: list[float], width: float, height: float, class_id: int) -> list[float]:
-        rect = geom.obb_norm_to_rect(pts_norm, width, height, class_id)
-        return self.clamp_box(rect)
-
-    def _point_in_rotated_box(self, x: float, y: float, rect: list[float]) -> bool:
-        return geom.point_in_rotated_box(x, y, rect)
-
-    def _rotation_meta_path_for_label(self, label_path: str) -> str:
-        return f"{label_path}.rot.json"
-
-    def _read_rotation_meta_angles(self, rot_meta_path: str) -> list[float] | None:
-        if not os.path.isfile(rot_meta_path):
-            return None
-        try:
-            with open(rot_meta_path, "r", encoding="utf-8") as f:
-                payload = json.load(f)
-            raw_angles = payload.get("angles_deg", [])
-            if not isinstance(raw_angles, list):
-                return None
-            out: list[float] = []
-            for angle in raw_angles:
-                out.append(self.normalize_angle_deg(float(angle)))
-            return out
-        except Exception:
-            self.logger.exception("Failed to read rotation meta: %s", rot_meta_path)
-            return None
-    
-    def get_handles(self, rect):
-        x1 = min(rect[0], rect[2])
-        y1 = min(rect[1], rect[3])
-        x2 = max(rect[0], rect[2])
-        y2 = max(rect[1], rect[3])
-        xm = (x1 + x2) / 2
-        ym = (y1 + y2) / 2
-
-        local_handles = [
-            (x1, y1), (xm, y1), (x2, y1), (x2, ym),
-            (x2, y2), (xm, y2), (x1, y2), (x1, ym)
-        ]
-        angle_deg = self.get_rect_angle_deg(rect)
-        if abs(angle_deg) <= 1e-6:
-            return local_handles
-        cx = (x1 + x2) / 2
-        cy = (y1 + y2) / 2
-        return [self.rotate_point_around_center(px, py, cx, cy, angle_deg) for px, py in local_handles]
+        return canvas_utils.normalize_angle_deg(angle_deg)    
 
     def get_rotation_handle_points(self, rect: list[float]) -> tuple[float, float, float, float]:
         x1 = min(rect[0], rect[2])
@@ -2845,11 +2308,7 @@ class GeckoAI:
         self.canvas.bind("<Delete>", self.delete_selected)
         self.canvas.bind("<KP_Delete>", self.delete_selected)
 
-    def on_canvas_resize(self, e):
-        return overlay_interaction.on_canvas_resize(self, e)
-
-    def fit_image_to_canvas(self):
-        return overlay_interaction.fit_image_to_canvas(self)
+    
 
 # ==================== Entrypoint ====================
 
