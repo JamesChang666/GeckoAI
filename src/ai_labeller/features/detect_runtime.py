@@ -144,6 +144,33 @@ def render_detect_result(app: Any, result0: Any, line_width: int = 1) -> Any:
             cv2_engine.LINE_AA,
         )
 
+    # Highlight target locations that failed spatial matching in golden compare mode.
+    try:
+        from ai_labeller.features.golden import normalize_golden_mode
+
+        run_mode = app.detect_run_mode_var.get().strip().lower()
+        golden_mode = normalize_golden_mode(app.detect_golden_mode_var.get())
+    except Exception:
+        run_mode = ""
+        golden_mode = ""
+    mismatch_rects = getattr(app, "_detect_spatial_mismatch_rects_norm", []) or []
+    if run_mode == "golden" and golden_mode == "position" and mismatch_rects:
+        for rect in mismatch_rects:
+            if not isinstance(rect, (list, tuple)) or len(rect) < 4:
+                continue
+            try:
+                nx1, ny1, nx2, ny2 = [float(v) for v in rect[:4]]
+            except Exception:
+                continue
+            cx = int(round(((nx1 + nx2) * 0.5) * float(w)))
+            cy = int(round(((ny1 + ny2) * 0.5) * float(h)))
+            rw = abs(nx2 - nx1) * float(w)
+            rh = abs(ny2 - ny1) * float(h)
+            radius = max(8, int(round(max(rw, rh) * 0.55)))
+            cross = max(7, int(round(radius * 0.7)))
+            cv2_engine.line(canvas, (cx - cross, cy - cross), (cx + cross, cy + cross), (0, 0, 255), 2)
+            cv2_engine.line(canvas, (cx - cross, cy + cross), (cx + cross, cy - cross), (0, 0, 255), 2)
+
     return canvas
 
 

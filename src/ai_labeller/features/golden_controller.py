@@ -48,6 +48,10 @@ def evaluate_golden_match(app: Any, result0: Any) -> tuple[str | None, str]:
     return golden_core.evaluate_golden_match(app, result0)
 
 
+def normalize_golden_mode(mode_raw: str) -> str:
+    return golden_core.normalize_golden_mode(mode_raw)
+
+
 def pick_golden_rect_on_image(app: Any, image_path: str) -> tuple[float, float, float, float] | None:
     pil_img = image_utils.open_image_as_pil(app, image_path, convert="RGB", parent=app.root)
     if pil_img is None:

@@ -128,18 +128,8 @@ def render_current_piece_result(app: Any, source_path: str) -> None:
     app._detect_status_var.set(
         f"{base_status} | piece {idx + 1}/{total}: {piece_name} | new cut pieces: {app._detect_last_cut_piece_count}"
     )
+    verdict, detail = app._evaluate_golden_match(result0)
     plotted = app._render_detect_result(result0, line_width=1)
-    cache_key = os.path.abspath(source_path)
-    cached = app._detect_image_result_cache.get(cache_key) or {}
-    entries = cached.get("entries") or []
-    if idx < len(entries):
-        entry = entries[idx]
-        app._detect_last_ocr_id = str(entry.get("ocr_id", "") or "")
-        app._detect_last_ocr_sub_id = str(entry.get("ocr_sub_id", "") or "")
-        verdict = entry.get("status")
-        detail = str(entry.get("detail", "") or "")
-    else:
-        verdict, detail = app._evaluate_golden_match(result0)
     app._set_detect_verdict(verdict, detail)
     app._update_detect_class_panel(result0)
     app._show_detect_plot(plotted)
@@ -164,14 +154,7 @@ def detect_render_image_index(app: Any) -> None:
             return
         result0 = app._detect_last_piece_results[0] if app._detect_last_piece_results else None
         if result0 is not None:
-            entries = cached.get("entries") or []
-            if entries:
-                app._detect_last_ocr_id = str(entries[0].get("ocr_id", "") or "")
-                app._detect_last_ocr_sub_id = str(entries[0].get("ocr_sub_id", "") or "")
-                verdict = entries[0].get("status")
-                detail = str(entries[0].get("detail", "") or "")
-            else:
-                verdict, detail = app._evaluate_golden_match(result0)
+            verdict, detail = app._evaluate_golden_match(result0)
             plotted = app._render_detect_result(result0, line_width=1)
             app._set_detect_verdict(verdict, detail)
             app._update_detect_class_panel(result0)
@@ -219,8 +202,8 @@ def detect_render_image_index(app: Any) -> None:
         app._detect_piece_index = 0
         render_current_piece_result(app, img_path)
         return
-    plotted = app._render_detect_result(results[0], line_width=1)
     verdict, detail = app._evaluate_golden_match(results[0])
+    plotted = app._render_detect_result(results[0], line_width=1)
     app._set_detect_verdict(verdict, detail)
     app._append_detect_report_row_once(os.path.basename(img_path), results[0], verdict, detail)
     app._save_detect_result_image(os.path.basename(img_path), plotted)

@@ -7,6 +7,31 @@ from typing import Any
 from ai_labeller.features import image_utils
 
 
+def _resolve_golden_image_path_for_report(app: Any) -> str:
+    sample = getattr(app, "_detect_golden_sample", None) or {}
+    direct = str(sample.get("image_path", "")).strip()
+    if direct and os.path.isfile(direct):
+        return os.path.abspath(direct)
+
+    label_path = str(sample.get("label_path", "")).strip()
+    if label_path:
+        base_dir = os.path.dirname(os.path.abspath(label_path))
+        stem = os.path.splitext(os.path.basename(label_path))[0]
+        for ext in (".png", ".jpg", ".jpeg", ".bmp"):
+            candidate = os.path.join(base_dir, stem + ext)
+            if os.path.isfile(candidate):
+                return os.path.abspath(candidate)
+    return ""
+
+
+def _resolve_golden_label_path_for_report(app: Any) -> str:
+    sample = getattr(app, "_detect_golden_sample", None) or {}
+    label_path = str(sample.get("label_path", "")).strip()
+    if label_path and os.path.isfile(label_path):
+        return os.path.abspath(label_path)
+    return ""
+
+
 def init_detect_report_logger(app: Any, source_kind: str, source_value: Any, output_dir: str | None = None) -> None:
     app._close_detect_report_logger()
     app._detect_image_result_cache = {}
@@ -41,6 +66,8 @@ def init_detect_report_logger(app: Any, source_kind: str, source_value: Any, out
                     "iou_threshold",
                     "status",
                     "details",
+                    "golden_image_path",
+                    "golden_label_path",
                 ])
             else:
                 writer.writerow([
@@ -231,8 +258,14 @@ def append_detect_report_row(app: Any, image_name: str, result0: Any, status: st
             with open(app._detect_report_csv_path, "a", newline="", encoding="utf-8-sig") as f:
                 writer = csv.writer(f)
                 if app._detect_report_mode == "golden":
-                    mode = app.detect_golden_mode_var.get().strip().lower()
-                    writer.writerow([ts, image_name, class_text, mode, iou_text, status or "", details_text])
+                    mode_raw = app.detect_golden_mode_var.get()
+                    if hasattr(app, "_normalize_golden_mode"):
+                        mode = app._normalize_golden_mode(mode_raw)
+                    else:
+                        mode = str(mode_raw or "").strip().lower()
+                    golden_image_path = _resolve_golden_image_path_for_report(app)
+                    golden_label_path = _resolve_golden_label_path_for_report(app)
+                    writer.writerow([ts, image_name, class_text, mode, iou_text, status or "", details_text, golden_image_path, golden_label_path])
                 else:
                     writer.writerow([ts, image_name, class_text])
     except Exception:

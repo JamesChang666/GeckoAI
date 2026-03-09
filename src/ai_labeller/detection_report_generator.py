@@ -1,3 +1,5 @@
+import base64
+import io
 import sys, re, os, json
 from collections import defaultdict, Counter
 import pandas as pd
@@ -5,6 +7,119 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.chart import BarChart, Reference
 from openpyxl.utils import get_column_letter
+
+
+def _safe_detect_image_name(image_name):
+    safe_name = str(image_name or "").strip() or "detect_result"
+    safe_name = safe_name.replace("\\", "_").replace("/", "_").replace(":", "_")
+    safe_name = safe_name.replace("*", "_").replace("?", "_").replace('"', "_")
+    safe_name = safe_name.replace("<", "_").replace(">", "_").replace("|", "_")
+    root, ext = os.path.splitext(safe_name)
+    if not ext:
+        ext = ".jpg"
+    if not root:
+        root = "detect_result"
+    return root + ext
+
+
+def _resolve_detect_image_path(csv_path, image_name):
+    detect_dir = os.path.join(os.path.dirname(os.path.abspath(csv_path)), "detected_images")
+    if not os.path.isdir(detect_dir):
+        return ""
+    candidate = os.path.join(detect_dir, _safe_detect_image_name(image_name))
+    if os.path.isfile(candidate):
+        return os.path.abspath(candidate)
+    return ""
+
+
+def _parse_yolo_rects(label_path):
+    out = []
+    if not label_path or not os.path.isfile(label_path):
+        return out
+    try:
+        with open(label_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:
+        return out
+    for raw in lines:
+        parts = raw.strip().split()
+        if len(parts) < 5:
+            continue
+        cls = str(parts[0]).strip()
+        if len(parts) >= 9:
+            try:
+                pts = list(map(float, parts[1:9]))
+            except Exception:
+                continue
+            xs = [pts[0], pts[2], pts[4], pts[6]]
+            ys = [pts[1], pts[3], pts[5], pts[7]]
+            x1, x2 = min(xs), max(xs)
+            y1, y2 = min(ys), max(ys)
+        else:
+            try:
+                cx, cy, w, h = map(float, parts[1:5])
+            except Exception:
+                continue
+            x1, y1 = cx - w / 2.0, cy - h / 2.0
+            x2, y2 = cx + w / 2.0, cy + h / 2.0
+        x1 = max(0.0, min(1.0, x1))
+        y1 = max(0.0, min(1.0, y1))
+        x2 = max(0.0, min(1.0, x2))
+        y2 = max(0.0, min(1.0, y2))
+        if x2 <= x1 or y2 <= y1:
+            continue
+        out.append((cls, (x1, y1, x2, y2)))
+    return out
+
+
+def _image_to_data_uri(path, max_side=1200):
+    if not path or not os.path.isfile(path):
+        return ""
+    try:
+        from PIL import Image
+
+        img = Image.open(path).convert("RGB")
+        w, h = img.size
+        scale = min(1.0, float(max_side) / float(max(1, max(w, h))))
+        if scale < 1.0:
+            nw = max(1, int(round(w * scale)))
+            nh = max(1, int(round(h * scale)))
+            img = img.resize((nw, nh), getattr(Image, "Resampling", Image).LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=88, optimize=True)
+        data = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{data}"
+    except Exception:
+        return ""
+
+
+def _golden_labeled_data_uri(image_path, label_path, max_side=1200):
+    if not image_path or not os.path.isfile(image_path):
+        return ""
+    try:
+        from PIL import Image, ImageDraw
+
+        img = Image.open(image_path).convert("RGB")
+        w, h = img.size
+        draw = ImageDraw.Draw(img)
+        for cls_id, (x1, y1, x2, y2) in _parse_yolo_rects(label_path):
+            px1 = int(round(x1 * w))
+            py1 = int(round(y1 * h))
+            px2 = int(round(x2 * w))
+            py2 = int(round(y2 * h))
+            draw.rectangle([(px1, py1), (px2, py2)], outline=(255, 99, 71), width=3)
+            draw.text((px1 + 4, max(0, py1 - 16)), f"id:{cls_id}", fill=(255, 99, 71))
+        scale = min(1.0, float(max_side) / float(max(1, max(w, h))))
+        if scale < 1.0:
+            nw = max(1, int(round(w * scale)))
+            nh = max(1, int(round(h * scale)))
+            img = img.resize((nw, nh), getattr(Image, "Resampling", Image).LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90, optimize=True)
+        data = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{data}"
+    except Exception:
+        return _image_to_data_uri(image_path, max_side=max_side)
 
 def load_data(path):
     ext = os.path.splitext(path)[1].lower()
@@ -40,6 +155,9 @@ def load_data(path):
             "num_classes":      len(classes),
             "classes_dict":     classes,
             "has_golden":       has_golden,
+            "golden_image_path": str(row.get("golden_image_path", "")).strip() if has_golden else "",
+            "golden_label_path": str(row.get("golden_label_path", "")).strip() if has_golden else "",
+            "detect_image_path": _resolve_detect_image_path(path, name),
         })
     return records, has_golden
 
@@ -365,6 +483,7 @@ def build_html(records, sorted_classes, class_img_count, prefix_stats,
     iou_chart  = ""
     iou_kpi    = ""
     pass_fail_chart = ""
+    compare_section = ""
 
     if has_golden:
         iou_kpi = f'<div class="kpi blue"><div class="val">{avg_iou if avg_iou else "—"}</div><div class="lbl">Avg IoU</div></div>'
@@ -378,6 +497,44 @@ def build_html(records, sorted_classes, class_img_count, prefix_stats,
       <h3>PASS vs FAIL per Category</h3>
       <canvas id="passFail" height="200"></canvas>
     </div>"""
+        golden_image_path = ""
+        golden_label_path = ""
+        for r in records:
+            if not golden_image_path:
+                p = str(r.get("golden_image_path", "")).strip()
+                if p and os.path.isfile(p):
+                    golden_image_path = p
+            if not golden_label_path:
+                p = str(r.get("golden_label_path", "")).strip()
+                if p and os.path.isfile(p):
+                    golden_label_path = p
+            if golden_image_path and golden_label_path:
+                break
+        golden_preview_uri = _golden_labeled_data_uri(golden_image_path, golden_label_path, max_side=1600)
+        cmp_rows = ""
+        for r in records:
+            det_img_uri = _image_to_data_uri(str(r.get("detect_image_path", "")).strip(), max_side=1280)
+            if not det_img_uri:
+                continue
+            status = str(r.get("status", "")).strip().upper() or "N/A"
+            status_cls = "status-pass" if status == "PASS" else ("status-fail" if status == "FAIL" else "status-na")
+            img_name = str(r.get("image_name", "")).strip()
+            details = str(r.get("details", "")).strip()
+            golden_html = f'<img src="{golden_preview_uri}" loading="lazy" />' if golden_preview_uri else '<div class="cmp-empty">Golden sample not available</div>'
+            details_html = f'<div class="cmp-detail">{details}</div>' if details else ""
+            cmp_rows += (
+                f'<div class="cmp-card">'
+                f'<div class="cmp-head"><span class="cmp-name">{img_name}</span><span class="cmp-status {status_cls}">{status}</span></div>'
+                f'<div class="cmp-grid">'
+                f'<div class="cmp-pane"><div class="cmp-title">Golden Sample (Labeled)</div>{golden_html}</div>'
+                f'<div class="cmp-pane"><div class="cmp-title">Detected Result</div><img src="{det_img_uri}" loading="lazy" /></div>'
+                f'</div>{details_html}</div>'
+            )
+        compare_section = (
+            '<div class="card"><h3>Golden vs Detection Comparison</h3>'
+            + (cmp_rows if cmp_rows else '<div class="cmp-empty">No detected images found for comparison.</div>')
+            + '</div>'
+        )
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -452,6 +609,19 @@ header {{
 .row3 {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:18px; margin-bottom:18px }}
 .card {{ background:var(--card); border:1px solid var(--border); border-radius:12px; padding:20px; margin-bottom:18px }}
 .card h3 {{ font-size:11px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:1.5px; margin-bottom:14px }}
+.cmp-card {{ border:1px solid #243048; border-radius:10px; padding:12px; margin-bottom:12px; background:#141d30 }}
+.cmp-head {{ display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px }}
+.cmp-name {{ font-size:12px; font-family:'JetBrains Mono',monospace; color:#cbd5e1; word-break:break-all }}
+.cmp-status {{ padding:3px 8px; border-radius:999px; font-size:10px; font-weight:700; letter-spacing:.5px }}
+.status-pass {{ color:#22c55e; border:1px solid #22c55e55; background:#052e16 }}
+.status-fail {{ color:#ef4444; border:1px solid #ef444455; background:#450a0a }}
+.status-na {{ color:#94a3b8; border:1px solid #334155; background:#0f172a }}
+.cmp-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:10px }}
+.cmp-pane {{ border:1px solid #2a364f; border-radius:8px; background:#0f172a; padding:8px }}
+.cmp-title {{ font-size:10px; color:#94a3b8; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px }}
+.cmp-pane img {{ width:100%; border-radius:6px; border:1px solid #1e293b; display:block }}
+.cmp-empty {{ color:#64748b; font-size:12px; padding:16px 8px }}
+.cmp-detail {{ margin-top:8px; color:#94a3b8; font-size:11px; line-height:1.5 }}
 
 /* Tables */
 .tbl-wrap {{ overflow-x:auto }}
@@ -475,6 +645,7 @@ td.num {{ font-family:'JetBrains Mono',monospace; font-size:11px; color:#94a3b8 
 /* Chart.js defaults */
 @media(max-width:768px) {{
   .row2,.row3 {{ grid-template-columns:1fr }}
+  .cmp-grid {{ grid-template-columns:1fr }}
   .container,.header-inner {{ padding:16px }}
   .kpi .val {{ font-size:22px }}
 }}
@@ -539,6 +710,7 @@ td.num {{ font-family:'JetBrains Mono',monospace; font-size:11px; color:#94a3b8 
       </table>
     </div>
   </div>
+  {compare_section}
 
 </div>
 <script>
