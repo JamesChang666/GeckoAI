@@ -1,7 +1,7 @@
 from typing import Any
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk, colorchooser
 import datetime
 import glob
 import tempfile
@@ -43,6 +43,108 @@ def _create_detect_setup_card(app, wrap: tk.Frame, *, width: int, height: int, t
         anchor="center",
     ).pack(fill="x", padx=24, pady=(0, 14))
     return card
+
+
+def _add_detect_class_color_editor(app: Any, card: tk.Frame, refresh_callback) -> None:
+    classes = app._get_detect_model_class_names() if hasattr(app, "_get_detect_model_class_names") else []
+    section = tk.Frame(card, bg=app.COLORS.get("bg_white"))
+    section.pack(fill="x", padx=28, pady=(0, 12))
+    tk.Label(
+        section,
+        text="Class Color Mapping",
+        font=app.font_primary,
+        fg=app.COLORS.get("text_secondary"),
+        bg=app.COLORS.get("bg_white"),
+        anchor="w",
+    ).pack(fill="x", pady=(0, 4))
+
+    if not classes:
+        tk.Label(
+            section,
+            text="No model classes loaded yet. Pick model in Step 1 first.",
+            font=app.font_mono,
+            fg=app.COLORS.get("text_secondary"),
+            bg=app.COLORS.get("bg_white"),
+            anchor="w",
+            justify="left",
+            wraplength=680,
+        ).pack(fill="x")
+        return
+
+    if not hasattr(app, "detect_class_color_map") or not isinstance(app.detect_class_color_map, dict):
+        app.detect_class_color_map = {}
+    color_map = app.detect_class_color_map
+
+    listbox = tk.Listbox(
+        section,
+        height=min(8, max(4, len(classes))),
+        font=app.font_primary,
+        bg=app.COLORS.get("bg_light"),
+        fg=app.COLORS.get("text_primary"),
+        relief="flat",
+        highlightthickness=0,
+        exportselection=False,
+    )
+    for cls_name in classes:
+        key = cls_name.strip().lower()
+        color_hex = color_map.get(key, "")
+        suffix = f" -> {color_hex}" if color_hex else ""
+        listbox.insert(tk.END, f"{cls_name}{suffix}")
+    listbox.pack(fill="x", pady=(0, 8))
+
+    btn_row = tk.Frame(section, bg=app.COLORS.get("bg_white"))
+    btn_row.pack(fill="x")
+
+    def _set_selected_class_color() -> None:
+        sel = listbox.curselection()
+        if not sel:
+            messagebox.showinfo("Detect Mode", "Please select a class first.", parent=app.root)
+            return
+        cls_name = classes[int(sel[0])]
+        key = cls_name.strip().lower()
+        initial_color = color_map.get(key, "#00FF00")
+        _rgb, hex_code = colorchooser.askcolor(color=initial_color, parent=app.root, title=f"Choose color for {cls_name}")
+        if not hex_code:
+            return
+        color_map[key] = hex_code.upper()
+        app.detect_class_color_map = color_map
+        refresh_callback()
+
+    def _on_listbox_double_click(_e: Any = None) -> None:
+        _set_selected_class_color()
+
+    def _clear_selected_class_color() -> None:
+        sel = listbox.curselection()
+        if not sel:
+            messagebox.showinfo("Detect Mode", "Please select a class first.", parent=app.root)
+            return
+        cls_name = classes[int(sel[0])]
+        key = cls_name.strip().lower()
+        if key in color_map:
+            color_map.pop(key, None)
+            app.detect_class_color_map = color_map
+            refresh_callback()
+
+    def _clear_all_class_colors() -> None:
+        app.detect_class_color_map = {}
+        refresh_callback()
+
+    app.create_secondary_button(
+        btn_row,
+        text="Set Selected Color",
+        command=_set_selected_class_color,
+    ).pack(side="left", padx=(0, 8))
+    app.create_secondary_button(
+        btn_row,
+        text="Clear Selected",
+        command=_clear_selected_class_color,
+    ).pack(side="left", padx=(0, 8))
+    app.create_secondary_button(
+        btn_row,
+        text="Clear All",
+        command=_clear_all_class_colors,
+    ).pack(side="left")
+    listbox.bind("<Double-Button-1>", _on_listbox_double_click)
 
 
 def show_detect_mode_page(app) -> None:
@@ -171,7 +273,7 @@ def show_detect_camera_mode_page(app) -> None:
         app,
         wrap,
         width=760,
-        height=600,
+        height=760,
         title="Detect Mode - Step 3 (Camera)",
         subtitle="Choose camera speed mode",
     )
@@ -299,6 +401,7 @@ def show_detect_camera_mode_page(app) -> None:
     )
     conf_scale.pack(fill="x", padx=28, pady=(0, 12))
     conf_scale.configure(command=lambda _v: conf_text.set(f"Conf Threshold: {float(app.detect_conf_var.get()):.2f}"))
+    _add_detect_class_color_editor(app, card, app.show_detect_camera_mode_page)
 
     out_dir = app.detect_output_dir_var.get().strip()
     out_hint = out_dir if out_dir else "(auto) current project root"
@@ -337,7 +440,7 @@ def show_detect_file_settings_page(app) -> None:
         app,
         wrap,
         width=760,
-        height=760,
+        height=900,
         title="Detect Mode - Step 3 (Image Folder)",
         subtitle="Set confidence threshold and run options",
     )
@@ -379,6 +482,7 @@ def show_detect_file_settings_page(app) -> None:
     )
     conf_scale.pack(fill="x", padx=28, pady=(0, 12))
     conf_scale.configure(command=lambda _v: conf_text.set(f"Conf Threshold: {float(app.detect_conf_var.get()):.2f}"))
+    _add_detect_class_color_editor(app, card, app.show_detect_file_settings_page)
 
     tk.Label(
         card,

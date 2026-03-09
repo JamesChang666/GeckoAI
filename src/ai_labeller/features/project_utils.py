@@ -195,6 +195,9 @@ def load_images_folder_only(app, directory: str) -> None:
     app.project_root = directory
     app.current_split = "train"
     app.combo_split.set(app.current_split)
+    app.class_names[:] = ["0", "1", "2"]
+    if hasattr(app, "_refresh_class_dropdown"):
+        app._refresh_class_dropdown(preferred_idx=0)
 
     app.image_files = _glob_image_files(app.project_root)
 

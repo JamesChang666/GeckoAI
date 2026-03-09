@@ -4,6 +4,8 @@ import os
 import threading
 from typing import Any
 
+from ai_labeller.features import image_utils
+
 
 def init_detect_report_logger(app: Any, source_kind: str, source_value: Any, output_dir: str | None = None) -> None:
     app._close_detect_report_logger()
@@ -21,6 +23,9 @@ def init_detect_report_logger(app: Any, source_kind: str, source_value: Any, out
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         run_dir = os.path.join(base_dir, f"detect_results_{timestamp}")
         os.makedirs(run_dir, exist_ok=True)
+        app._detect_saved_image_dir = os.path.join(run_dir, "detected_images")
+        os.makedirs(app._detect_saved_image_dir, exist_ok=True)
+        app._detect_saved_image_keys = set()
         csv_path = os.path.join(run_dir, f"detect_results_{timestamp}.csv")
         app._detect_report_mode = app.detect_run_mode_var.get().strip().lower()
         if app._detect_report_mode not in {"pure_detect", "golden"}:
@@ -79,6 +84,43 @@ def _close_detect_report_logger(app: Any) -> None:
             app._detect_report_generated_paths = set()
         except Exception:
             pass
+        try:
+            app._detect_saved_image_dir = None
+        except Exception:
+            pass
+        try:
+            app._detect_saved_image_keys = set()
+        except Exception:
+            pass
+
+
+def save_detect_result_image(app: Any, image_name: str, plot_bgr: Any) -> None:
+    out_dir = getattr(app, "_detect_saved_image_dir", None)
+    if not out_dir or plot_bgr is None:
+        return
+    key = str(image_name or "").strip() or "detect_result"
+    saved_keys = getattr(app, "_detect_saved_image_keys", set())
+    if key in saved_keys:
+        return
+    try:
+        safe_name = key.replace("\\", "_").replace("/", "_").replace(":", "_")
+        safe_name = safe_name.replace("*", "_").replace("?", "_").replace('"', "_")
+        safe_name = safe_name.replace("<", "_").replace(">", "_").replace("|", "_")
+        root, ext = os.path.splitext(safe_name)
+        if not ext:
+            ext = ".jpg"
+        if not root:
+            root = "detect_result"
+        out_path = os.path.join(out_dir, root + ext)
+        suffix = 1
+        while os.path.exists(out_path):
+            out_path = os.path.join(out_dir, f"{root}_{suffix}{ext}")
+            suffix += 1
+        image_utils.write_cv2_image(out_path, plot_bgr)
+        saved_keys.add(key)
+        app._detect_saved_image_keys = saved_keys
+    except Exception:
+        app.logger.exception("Failed to save detect result image: %s", key)
 
 
 def _resolve_detection_report_generator_script() -> str | None:

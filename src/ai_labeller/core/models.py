@@ -21,4 +21,4 @@ class AppState:
     image_files: list[str] = field(default_factory=list)
     current_idx: int = 0
     rects: list[Rect] = field(default_factory=list)
-    class_names: list[str] = field(default_factory=lambda: ["text", "figure", "table"])
+    class_names: list[str] = field(default_factory=lambda: ["0", "1", "2"])

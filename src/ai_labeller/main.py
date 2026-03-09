@@ -81,6 +81,7 @@ class GeckoAI:
         self.logger = setup_logging(os.path.join(os.path.expanduser("~"), ".ai_labeller.log"))
 
         self.root.title(LANG_MAP[self.lang]["title"])
+        self.filedialog = filedialog
         # Expose constants on the app instance for UI modules expecting `app.COLORS` etc.
         self.COLORS = COLORS
         self.THEMES = THEMES
@@ -185,6 +186,9 @@ class GeckoAI:
         self.detect_golden_mode_var = tk.StringVar(value="both")
         self.detect_golden_iou_var = tk.DoubleVar(value=0.50)
         self.detect_golden_class_var = tk.StringVar(value="")
+        self.detect_class_color_map: dict[str, str] = {}
+        self._detect_model_class_names_path: str = ""
+        self._detect_model_class_names_cache: list[str] = []
         self._detect_golden_sample: dict[str, Any] | None = None
         self._detect_bg_cut_bundle: Any = None
         self._detect_last_cut_piece_count: int = 0
@@ -277,6 +281,7 @@ class GeckoAI:
         self._trigger_detect_report_generation = lambda csv_path: report_utils._trigger_detect_report_generation(self, csv_path)
         self._append_detect_report_row = lambda image_name, result0, status, details: report_utils.append_detect_report_row(self, image_name, result0, status, details)
         self._append_detect_report_row_once = lambda image_name, result0, status, details: report_utils.append_detect_report_row_once(self, image_name, result0, status, details)
+        self._save_detect_result_image = lambda image_name, plot_bgr: report_utils.save_detect_result_image(self, image_name, plot_bgr)
 
         self._configure_detect_golden_sample = lambda: golden_controller.configure_detect_golden_sample(self)
         self._load_detect_background_cut_bundle = lambda golden_dir: golden_controller.load_detect_background_cut_bundle(self, golden_dir)
@@ -304,6 +309,7 @@ class GeckoAI:
         self._prepare_background_cut_detect_source = lambda source: detect_runtime.prepare_background_cut_detect_source(self, source)
         self._select_primary_result_index = lambda results: detect_runtime.select_primary_result_index(results)
         self._run_detect_inference = lambda source: detect_runtime.run_detect_inference(self, source)
+        self._render_detect_result = lambda result0, line_width=1: detect_runtime.render_detect_result(self, result0, line_width=line_width)
 
         self._render_detect_current_piece_result = lambda source_path: detect_mode.render_current_piece_result(self, source_path)
         self._detect_render_image_index = lambda: detect_mode.detect_render_image_index(self)
@@ -323,6 +329,8 @@ class GeckoAI:
         self.normalize_project_root = project_utils.normalize_project_root
         self.find_yolo_project_root = project_utils.find_yolo_project_root
         self._list_split_images_for_root = project_utils.list_split_images_for_root
+        self._list_split_labeled_images_for_root = project_utils._list_split_labeled_images_for_root
+        self._list_flat_labeled_images_for_root = project_utils._list_flat_labeled_images_for_root
         self._glob_image_files = project_utils._glob_image_files
         self._glob_label_files = project_utils._glob_label_files
         self._existing_image_splits = project_utils.existing_image_splits
@@ -395,7 +403,7 @@ class GeckoAI:
         self.restore_removed_file_by_name = lambda filename: label_mode.restore_removed_file_by_name(self, filename)
         self.load_img = lambda: image_load.load_image(self)
         self.save_current = lambda: label_mode.save_current(self)
-        self._reindex_dataset_labels_after_class_delete = lambda deleted_idx: label_mode._reindex_dataset_labels_after_class_delete(self, deleted_idx)
+        self._reindex_dataset_labels_after_class_delete = lambda deleted_idx: label_mode.reindex_dataset_labels_after_class_delete(self, deleted_idx)
         self.load_project_from_path = lambda directory, preferred_image=None, save_session=True: project_utils.load_project_from_path(self, directory, preferred_image=preferred_image, save_session=save_session)
         self.load_project_root = lambda: project_utils.load_project_root(self)
         self.load_split_data = lambda preferred_image=None: project_utils.load_split_data(self, preferred_image=preferred_image)
@@ -428,8 +436,8 @@ class GeckoAI:
         self.setup_ui()
         self.bind_events()
         self.root.protocol("WM_DELETE_WINDOW", self.on_app_close)
-        self.load_session_state()
         self._startup_mode = (startup_mode or "chooser").strip().lower()
+        self.load_session_state(restore_project=self._startup_mode != "label")
         mode = self._startup_mode
         if mode == "detect":
             self.root.after(120, self.show_detect_mode_page)
@@ -831,9 +839,9 @@ class GeckoAI:
         from ai_labeller.features.io_utils import save_session_state
         save_session_state(self)
 
-    def load_session_state(self) -> None:
+    def load_session_state(self, restore_project: bool = True) -> None:
         from ai_labeller.features.io_utils import load_session_state
-        load_session_state(self)
+        load_session_state(self, restore_project=restore_project)
 
     def on_detection_model_mode_changed(self, e: Any = None) -> None:
         if self.det_model_mode.get() == "Official YOLO26m.pt (Bundled)":
@@ -901,6 +909,9 @@ class GeckoAI:
         if not model_path:
             return
         self.detect_model_path_var.set(os.path.abspath(model_path))
+        self._detect_model_class_names_path = ""
+        self._detect_model_class_names_cache = []
+        self.detect_class_color_map = {}
         self.show_detect_mode_page()
 
     def _go_detect_source_page(self) -> None:
@@ -1178,6 +1189,45 @@ class GeckoAI:
         except Exception:
             return False
 
+    def _get_detect_model_class_names(self) -> list[str]:
+        model_var = getattr(self, "detect_model_path_var", None)
+        model_path_raw = model_var.get().strip() if model_var is not None else ""
+        if not model_path_raw:
+            return []
+        try:
+            model_path = self._resolve_custom_model_path(model_path_raw)
+        except Exception:
+            return []
+        model_path = os.path.abspath(model_path)
+        if self._detect_model_class_names_path == model_path and self._detect_model_class_names_cache:
+            return list(self._detect_model_class_names_cache)
+
+        try:
+            loaded_key = ("detect_mode", model_path)
+            yolo_utils.ensure_yolo_model(self, loaded_key, model_path)
+        except Exception:
+            self.logger.exception("Failed to load detect model class names from: %s", model_path)
+            return []
+
+        names_obj = getattr(self.yolo_model, "names", None)
+        class_names: list[str] = []
+        if isinstance(names_obj, dict):
+            keys = list(names_obj.keys())
+            try:
+                keys = sorted(keys, key=lambda k: int(k))
+            except Exception:
+                keys = sorted(keys, key=lambda k: str(k))
+            for key in keys:
+                name = str(names_obj.get(key, "")).strip()
+                if name:
+                    class_names.append(name)
+        elif isinstance(names_obj, (list, tuple)):
+            class_names = [str(x).strip() for x in names_obj if str(x).strip()]
+
+        self._detect_model_class_names_path = model_path
+        self._detect_model_class_names_cache = list(class_names)
+        return class_names
+
     
 
     def _set_detect_verdict(self, status: str | None, details: str) -> None:
@@ -1315,6 +1365,7 @@ class GeckoAI:
                     "Default match threshold is 0.3.",
                     parent=self.root,
                 )
+                self.logger.info("Cut background prompt answer: %s", "yes" if run_cut_bg else "no")
                 if run_cut_bg:
                     if not HAS_CV2:
                         messagebox.showwarning(
@@ -1352,8 +1403,28 @@ class GeckoAI:
 
             diag = self.diagnose_folder_structure(directory)
             self.logger.info("Folder diagnosis: %s", diag)
-            if not diag["is_yolo_project"] and diag["flat_images"] == 0:
-                self.show_folder_diagnosis(directory)
+
+            # If the user selected a plain image folder, prefer it directly.
+            # This avoids accidentally switching to a nearby YOLO project in a parent/child folder.
+            if (not diag.get("is_yolo_project")) and int(diag.get("flat_images", 0)) > 0:
+                self.load_images_folder_only(directory)
+                if self.image_files:
+                    self.root.lift()
+                    self.root.focus_force()
+                    messagebox.showinfo(
+                        LANG_MAP[self.lang]["title"],
+                        LANG_MAP[self.lang].get(
+                            "loaded_from",
+                            "Loaded {count} images\nFrom: {path}\nSplit: {split}",
+                        ).format(
+                            count=len(self.image_files),
+                            path=directory,
+                            split=self.current_split,
+                        ),
+                        parent=self.root,
+                    )
+                else:
+                    self.show_folder_diagnosis(directory)
                 return
 
             root_dir = self.normalize_project_root(directory)

@@ -9,6 +9,144 @@ import numpy as np
 from ai_labeller.features import image_utils
 
 
+def _parse_hex_color_to_bgr(hex_color: str, default_bgr: tuple[int, int, int] = (0, 255, 0)) -> tuple[int, int, int]:
+    if not isinstance(hex_color, str):
+        return default_bgr
+    s = hex_color.strip()
+    if not s:
+        return default_bgr
+    if s.startswith("#"):
+        s = s[1:]
+    if len(s) != 6:
+        return default_bgr
+    try:
+        r = int(s[0:2], 16)
+        g = int(s[2:4], 16)
+        b = int(s[4:6], 16)
+    except ValueError:
+        return default_bgr
+    return (b, g, r)
+
+
+def _auto_class_color_bgr(class_key: str) -> tuple[int, int, int]:
+    key = str(class_key or "class").encode("utf-8", errors="ignore")
+    digest = hashlib.sha1(key).digest()
+    # Keep colors bright enough for visibility.
+    r = 64 + (digest[0] % 192)
+    g = 64 + (digest[1] % 192)
+    b = 64 + (digest[2] % 192)
+    return (b, g, r)
+
+
+def render_detect_result(app: Any, result0: Any, line_width: int = 1) -> Any:
+    cv2_engine = getattr(app, "cv2", None)
+    if cv2_engine is None or result0 is None:
+        return result0.plot(line_width=line_width)
+    class_color_map = getattr(app, "detect_class_color_map", {}) or {}
+
+    orig_img = getattr(result0, "orig_img", None)
+    if orig_img is None:
+        return result0.plot(line_width=line_width)
+
+    try:
+        canvas = orig_img.copy()
+    except Exception:
+        return result0.plot(line_width=line_width)
+
+    boxes = getattr(result0, "boxes", None)
+    xyxy_attr = getattr(boxes, "xyxy", None) if boxes is not None else None
+    if xyxy_attr is None:
+        return canvas
+
+    h, w = canvas.shape[:2]
+    try:
+        xyxy_list = xyxy_attr.tolist()
+    except Exception:
+        xyxy_list = []
+    try:
+        cls_list = boxes.cls.tolist() if getattr(boxes, "cls", None) is not None else []
+    except Exception:
+        cls_list = []
+    try:
+        conf_list = boxes.conf.tolist() if getattr(boxes, "conf", None) is not None else []
+    except Exception:
+        conf_list = []
+    names = getattr(result0, "names", {}) or {}
+
+    thickness = max(1, int(line_width))
+    text_scale = 0.5
+    text_thickness = max(1, thickness)
+    for idx, coords in enumerate(xyxy_list):
+        if not isinstance(coords, (list, tuple)) or len(coords) < 4:
+            continue
+        try:
+            x1, y1, x2, y2 = [int(round(float(v))) for v in coords[:4]]
+        except Exception:
+            continue
+        x1 = max(0, min(w - 1, x1))
+        y1 = max(0, min(h - 1, y1))
+        x2 = max(0, min(w - 1, x2))
+        y2 = max(0, min(h - 1, y2))
+        if x2 <= x1 or y2 <= y1:
+            continue
+
+        cls_name = ""
+        if idx < len(cls_list):
+            try:
+                cid = int(float(cls_list[idx]))
+                if isinstance(names, dict):
+                    cls_name = str(names.get(cid, cid))
+                elif isinstance(names, (list, tuple)) and 0 <= cid < len(names):
+                    cls_name = str(names[cid])
+                else:
+                    cls_name = str(cid)
+            except Exception:
+                cls_name = ""
+        class_key = str(cls_name or "").strip().lower()
+        mapped_hex = class_color_map.get(class_key, "")
+        if mapped_hex:
+            box_color = _parse_hex_color_to_bgr(mapped_hex, default_bgr=_auto_class_color_bgr(class_key or f"idx_{idx}"))
+        else:
+            box_color = _auto_class_color_bgr(class_key or f"idx_{idx}")
+        text_bg = box_color
+        text_fg = (0, 0, 0) if (int(box_color[0]) + int(box_color[1]) + int(box_color[2])) > 382 else (255, 255, 255)
+        cv2_engine.rectangle(canvas, (x1, y1), (x2, y2), box_color, thickness)
+
+        conf_text = ""
+        if idx < len(conf_list):
+            try:
+                conf_text = f"{float(conf_list[idx]):.2f}"
+            except Exception:
+                conf_text = ""
+        label = cls_name if not conf_text else f"{cls_name} {conf_text}".strip()
+        if not label:
+            continue
+
+        (tw, th), baseline = cv2_engine.getTextSize(
+            label,
+            cv2_engine.FONT_HERSHEY_SIMPLEX,
+            text_scale,
+            text_thickness,
+        )
+        by2 = max(th + baseline + 2, y1)
+        by1 = max(0, by2 - th - baseline - 4)
+        bx2 = min(w - 1, x1 + tw + 6)
+        bx1 = max(0, x1)
+        cv2_engine.rectangle(canvas, (bx1, by1), (bx2, by2), text_bg, -1)
+        cv2_engine.putText(
+            canvas,
+            label,
+            (bx1 + 3, max(th + 1, by2 - baseline - 2)),
+            cv2_engine.FONT_HERSHEY_SIMPLEX,
+            text_scale,
+            text_fg,
+            text_thickness,
+            cv2_engine.LINE_AA,
+        )
+
+    return canvas
+
+
 def should_use_background_cut_detection(app) -> bool:
     return (
         app.detect_run_mode_var.get().strip().lower() == "golden"

@@ -103,7 +103,7 @@ def save_session_state(app: Any) -> None:
     write_project_progress_yaml(app)
 
 
-def load_session_state(app: Any) -> None:
+def load_session_state(app: Any, restore_project: bool = True) -> None:
     if not os.path.exists(app.session_path):
         return
     try:
@@ -119,9 +119,6 @@ def load_session_state(app: Any) -> None:
     model_mode = data.get("detection_model_mode", "Official YOLO26m.pt (Bundled)")
     model_path = data.get("detection_model_path", app.config.yolo_model_path)
 
-    if not project_root or not os.path.exists(project_root):
-        return
-
     if split not in ["train", "val", "test"]:
         split = "train"
     if model_mode not in {
@@ -134,6 +131,13 @@ def load_session_state(app: Any) -> None:
     if model_path:
         app.yolo_path.set(model_path)
         app._register_model_path(model_path)
+
+    if not restore_project:
+        return
+
+    if not project_root or not os.path.exists(project_root):
+        return
+
     app.current_split = split
     app.combo_split.set(split)
     app.load_project_from_path(project_root, preferred_image=image_name, save_session=False)

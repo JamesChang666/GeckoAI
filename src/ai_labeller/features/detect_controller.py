@@ -128,7 +128,7 @@ def render_current_piece_result(app: Any, source_path: str) -> None:
     app._detect_status_var.set(
         f"{base_status} | piece {idx + 1}/{total}: {piece_name} | new cut pieces: {app._detect_last_cut_piece_count}"
     )
-    plotted = result0.plot(line_width=1)
+    plotted = app._render_detect_result(result0, line_width=1)
     cache_key = os.path.abspath(source_path)
     cached = app._detect_image_result_cache.get(cache_key) or {}
     entries = cached.get("entries") or []
@@ -172,7 +172,7 @@ def detect_render_image_index(app: Any) -> None:
                 detail = str(entries[0].get("detail", "") or "")
             else:
                 verdict, detail = app._evaluate_golden_match(result0)
-            plotted = result0.plot(line_width=1)
+            plotted = app._render_detect_result(result0, line_width=1)
             app._set_detect_verdict(verdict, detail)
             app._update_detect_class_panel(result0)
             app._show_detect_plot(plotted)
@@ -207,6 +207,8 @@ def detect_render_image_index(app: Any) -> None:
                 verdict_i,
                 detail_i,
             )
+            piece_plot = app._render_detect_result(piece_result, line_width=1)
+            app._save_detect_result_image(f"{os.path.basename(img_path)}::{piece_name}", piece_plot)
         app._detect_image_result_cache[cache_key] = {
             "results": list(app._detect_last_piece_results),
             "piece_paths": list(app._detect_last_piece_paths),
@@ -217,10 +219,11 @@ def detect_render_image_index(app: Any) -> None:
         app._detect_piece_index = 0
         render_current_piece_result(app, img_path)
         return
-    plotted = results[0].plot(line_width=1)
+    plotted = app._render_detect_result(results[0], line_width=1)
     verdict, detail = app._evaluate_golden_match(results[0])
     app._set_detect_verdict(verdict, detail)
     app._append_detect_report_row_once(os.path.basename(img_path), results[0], verdict, detail)
+    app._save_detect_result_image(os.path.basename(img_path), plotted)
     app._update_detect_class_panel(results[0])
     app._show_detect_plot(plotted)
     app._detect_image_result_cache[cache_key] = {

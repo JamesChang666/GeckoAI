@@ -21,11 +21,16 @@ Desktop image annotation tool for object detection datasets (Tkinter + Ultralyti
   - Piece-by-piece display and navigation in detect workspace
   - Cached detect results per source image (back/next does not re-run detection)
   - Report dedupe (same image/piece is not appended repeatedly)
+  - Save rendered detect images into `detect_results_xxx/detected_images/`
 - Detect mode setup wizard:
   - Step 1: Choose model
   - Step 2: Choose source (`Camera` or `Image Folder`)
   - Camera path: pick camera (when multiple cameras are found), choose auto/manual FPS mode, set confidence threshold
   - Image folder path: choose source folder, confidence threshold, run type, output folder, then start detect
+  - Class color mapping:
+    - List model classes and assign per-class box colors
+    - Double-click class row to set color quickly
+    - Classes without assigned color use auto-generated deterministic colors
 - Startup source selection:
   - Dropdown chooser (default: `Open Images Folder`)
   - Open YOLO Dataset
@@ -217,3 +222,4 @@ uvicorn app:app --host 127.0.0.1 --port 8000 --reload
 - To use your own Tk app icon, put `app_icon.png` in `src/ai_labeller/assets/`.
 - Session file: `~/.ai_labeller_session.json`.
 - Project progress YAML: `<project_root>/.ai_labeller_progress.yaml` (resume split/image and class names after reopen).
+- Flat image folder mode defaults classes to `0`, `1`, `2`.
