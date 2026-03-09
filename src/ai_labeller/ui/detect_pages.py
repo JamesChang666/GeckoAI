@@ -503,6 +503,16 @@ def show_detect_file_settings_page(app) -> None:
     mode_combo.bind("<<ComboboxSelected>>", lambda _e: app.show_detect_file_settings_page())
 
     if app.detect_run_mode_var.get().strip().lower() == "golden":
+        mode_label_to_value = {
+            "Label Count Match": "class",
+            "Spatial Match": "position",
+            "Strict Match": "both",
+        }
+        mode_value_to_label = {v: k for k, v in mode_label_to_value.items()}
+        current_mode = app._normalize_golden_mode(app.detect_golden_mode_var.get()) if hasattr(app, "_normalize_golden_mode") else str(app.detect_golden_mode_var.get()).strip().lower()
+        app.detect_golden_mode_var.set(current_mode)
+        mode_display_var = tk.StringVar(value=mode_value_to_label.get(current_mode, "Strict Match"))
+
         golden_summary = "None"
         if app._detect_golden_sample is not None:
             targets = app._detect_golden_sample.get("targets") or []
@@ -525,6 +535,31 @@ def show_detect_file_settings_page(app) -> None:
             justify="left",
             wraplength=680,
         ).pack(fill="x", padx=28, pady=(0, 6))
+
+        tk.Label(
+            card,
+            text="Golden Match Strategy",
+            font=app.font_primary,
+            fg=app.COLORS.get("text_secondary"),
+            bg=app.COLORS.get("bg_white"),
+            anchor="w",
+        ).pack(fill="x", padx=28, pady=(0, 4))
+        golden_mode_combo = ttk.Combobox(
+            card,
+            textvariable=mode_display_var,
+            values=list(mode_label_to_value.keys()),
+            state="readonly",
+            font=app.font_primary,
+        )
+        golden_mode_combo.pack(fill="x", padx=28, pady=(0, 10))
+
+        def _on_golden_mode_changed(_e: Any = None) -> None:
+            chosen_label = mode_display_var.get().strip()
+            app.detect_golden_mode_var.set(mode_label_to_value.get(chosen_label, "both"))
+
+        golden_mode_combo.bind("<<ComboboxSelected>>", _on_golden_mode_changed)
+        _on_golden_mode_changed()
+
         app.create_secondary_button(
             card,
             text="Import Golden from Label Mode (YOLO txt + dataset.yaml mapping)",

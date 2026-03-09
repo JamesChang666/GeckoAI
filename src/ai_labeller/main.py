@@ -203,6 +203,7 @@ class GeckoAI:
         self._detect_report_logged_keys: set[str] = set()
         self._detect_last_ocr_id: str = ""
         self._detect_last_ocr_sub_id: str = ""
+        self._detect_spatial_mismatch_rects_norm: list[tuple[float, float, float, float]] = []
         self._detect_ocr_warning_shown = False
         self._easy_ocr_engine: Any = None
         self._golden_capture_active = False
@@ -296,9 +297,10 @@ class GeckoAI:
         self._load_mapping_from_dataset_yaml = lambda yaml_path: golden_controller.load_mapping_from_dataset_yaml(yaml_path)
         self._find_golden_id_config_in_folder = lambda folder: golden_controller.find_golden_id_config_in_folder(folder)
         self._load_golden_id_config = lambda json_path: golden_controller.load_golden_id_config(json_path)
-        self._prompt_golden_id_classes = lambda class_mapping, parent=None: golden_controller.prompt_golden_id_classes(self, class_mapping, parent=parent)
+        self._prompt_golden_id_classes = lambda class_mapping, parent=None: golden_controller.pick_golden_id_classes(self, class_mapping, parent=parent)
         self._write_golden_id_config = lambda folder, class_id, class_name, sub_id_class_id=None, sub_id_class_name=None: golden_controller.write_golden_id_config(folder, class_id, class_name, sub_id_class_id=sub_id_class_id, sub_id_class_name=sub_id_class_name)
         self._pick_golden_rect_on_image = lambda image_path: golden_controller.pick_golden_rect_on_image(self, image_path)
+        self._normalize_golden_mode = lambda mode_raw: golden_controller.normalize_golden_mode(mode_raw)
 
         self._should_use_background_cut_detection = lambda: detect_runtime.should_use_background_cut_detection(self)
         self._cleanup_detect_cut_piece_temp = lambda remove_root=False: detect_runtime.cleanup_detect_cut_piece_temp(self, remove_root=remove_root)
@@ -1035,7 +1037,7 @@ class GeckoAI:
             if not targets:
                 messagebox.showwarning("Detect Mode", "Golden sample has no targets.", parent=self.root)
                 return
-            mode = self.detect_golden_mode_var.get().strip().lower()
+            mode = self._normalize_golden_mode(self.detect_golden_mode_var.get())
             has_class = any((t.get("class_id") is not None or t.get("class_name")) for t in targets)
             if mode in {"class", "both"} and not has_class:
                 messagebox.showwarning("Detect Mode", "Golden mode requires class info (ID or mapping name).", parent=self.root)
@@ -1046,7 +1048,7 @@ class GeckoAI:
                 or self._detect_golden_sample.get("sub_id_class_id") is not None
                 or bool(str(self._detect_golden_sample.get("sub_id_class_name", "")).strip())
             )
-            if id_enabled and not HAS_EASY_OCR:
+            if id_enabled and not getattr(ocr_utils, "HAS_EASY_OCR", False):
                 messagebox.showwarning(
                     "Detect Mode",
                     "ID/Sub ID OCR is configured, but EasyOCR is not installed. Detection will run without OCR IDs.",

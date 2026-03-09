@@ -192,10 +192,19 @@ def list_split_images(project_root: str, split: str) -> list[str]:
 
 
 def load_images_folder_only(app, directory: str) -> None:
-    app.project_root = directory
+    app.project_root = directory.replace("\\", "/")
     app.current_split = "train"
     app.combo_split.set(app.current_split)
-    app.class_names[:] = ["0", "1", "2"]
+
+    progress = app._read_project_progress_yaml(app.project_root)
+    progress_image = progress.get("image_name", "").strip()
+    progress_index_raw = progress.get("image_index", "").strip()
+    progress_class_names = app._extract_class_names_from_progress(progress)
+
+    if progress_class_names:
+        app.class_names[:] = progress_class_names
+    else:
+        app.class_names[:] = ["0"]
     if hasattr(app, "_refresh_class_dropdown"):
         app._refresh_class_dropdown(preferred_idx=0)
 
@@ -218,6 +227,20 @@ def load_images_folder_only(app, directory: str) -> None:
         return
 
     app.current_idx = 0
+    if progress_image:
+        name_to_idx = {
+            os.path.basename(path): i
+            for i, path in enumerate(app.image_files)
+        }
+        app.current_idx = name_to_idx.get(progress_image, 0)
+    else:
+        try:
+            progress_index = int(progress_index_raw)
+        except ValueError:
+            progress_index = 0
+        if 0 <= progress_index < len(app.image_files):
+            app.current_idx = progress_index
+
     from ai_labeller.features import image_load
     image_load.load_image(app)
 

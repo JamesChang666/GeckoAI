@@ -85,7 +85,7 @@ def setup_toolbar(app):
 
     tk.Frame(center_frame, width=1, bg=app.COLORS["divider"]).pack(side="left", fill="y", padx=8, pady=10)
 
-    ttk.Combobox(center_frame, textvariable=app.var_export_format, values=["YOLO (.txt)", "JSON"], state="readonly", width=12, font=app.font_primary).pack(side="left", padx=(0, 6), pady=12)
+    ttk.Combobox(center_frame, textvariable=app.var_export_format, values=["YOLO (.txt)", "JSON", "COCO"], state="readonly", width=12, font=app.font_primary).pack(side="left", padx=(0, 6), pady=12)
 
     app.create_toolbar_button(center_frame, text=app.LANG_MAP[app.lang]["export"], command=app.export_all_by_selected_format, bg=app.COLORS["info"]).pack(side="left", padx=2, pady=8)
     app.create_toolbar_button(center_frame, text="Export Golden", command=app.export_golden_folder, bg=app.COLORS["warning"]).pack(side="left", padx=2, pady=8)
@@ -234,8 +234,20 @@ def create_class_card(app, parent):
     app.combo_cls.pack(fill="x", pady=(0, 12))
     app.combo_cls.bind("<<ComboboxSelected>>", app.on_class_change_request)
 
-    app.create_primary_button(content, text=app.LANG_MAP[app.lang]["edit_classes"], command=app.edit_classes_table).pack(fill="x", pady=(0, 12))
-    app.create_secondary_button(content, text=app.LANG_MAP[app.lang]["clear_labels"], command=app.clear_current_labels).pack(fill="x", pady=(0, 12))
+    class_action_row = tk.Frame(content, bg=app.COLORS["bg_white"])
+    class_action_row.pack(fill="x", pady=(0, 12))
+
+    app.create_primary_button(
+        class_action_row,
+        text=app.LANG_MAP[app.lang]["edit_classes"],
+        command=app.edit_classes_table,
+    ).pack(side="left", fill="x", expand=True, padx=(0, 4))
+    app.create_primary_button(
+        class_action_row,
+        text=app.LANG_MAP[app.lang]["clear_labels"],
+        command=app.clear_current_labels,
+        bg=app.COLORS["danger"],
+    ).pack(side="left", fill="x", expand=True, padx=(4, 0))
 
     tk.Checkbutton(content, text="Show Last Photo Labels (ghost)", variable=app.var_show_prev_labels, command=app.render, bg=app.COLORS["bg_white"], fg=app.COLORS["text_primary"], font=app.font_primary, activebackground=app.COLORS["bg_white"], selectcolor=app.COLORS["bg_white"], anchor="w").pack(fill="x", pady=(0, 12))
 

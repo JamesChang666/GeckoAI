@@ -253,6 +253,22 @@ def write_golden_id_config(
     return cfg_path
 
 
+def normalize_golden_mode(mode_raw: str) -> str:
+    mode = str(mode_raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    mapping = {
+        "class": "class",
+        "label_count_match": "class",
+        "count_match": "class",
+        "position": "position",
+        "location_match": "position",
+        "spatial_match": "position",
+        "both": "both",
+        "all_match": "both",
+        "strict_match": "both",
+    }
+    return mapping.get(mode, "both")
+
+
 def bbox_iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
     ax1, ay1, ax2, ay2 = a
     bx1, by1, bx2, by2 = b
@@ -274,6 +290,7 @@ def bbox_iou(a: tuple[float, float, float, float], b: tuple[float, float, float,
 
 
 def evaluate_golden_match(app, result0: Any) -> tuple[str | None, str]:
+    app._detect_spatial_mismatch_rects_norm = []
     if app.detect_run_mode_var.get().strip().lower() != "golden" or app._detect_golden_sample is None:
         app._detect_last_cut_piece_count = 0
         app._detect_last_ocr_id = ""
@@ -284,7 +301,7 @@ def evaluate_golden_match(app, result0: Any) -> tuple[str | None, str]:
         app._detect_last_ocr_id = ""
         app._detect_last_ocr_sub_id = ""
         return "FAIL", "golden targets missing"
-    mode = app.detect_golden_mode_var.get().strip().lower()
+    mode = normalize_golden_mode(app.detect_golden_mode_var.get())
     iou_thr = float(app.detect_golden_iou_var.get())
     h, w = getattr(result0, "orig_shape", (0, 0))
     if h <= 0 or w <= 0:
@@ -314,6 +331,7 @@ def evaluate_golden_match(app, result0: Any) -> tuple[str | None, str]:
 
     matched_targets = 0
     best_ious: list[float] = []
+    unmatched_target_rects: list[tuple[float, float, float, float]] = []
     for target in targets:
         rect_norm = target.get("rect_norm")
         if rect_norm is None:
@@ -355,12 +373,18 @@ def evaluate_golden_match(app, result0: Any) -> tuple[str | None, str]:
         best_ious.append(target_best_iou)
         if target_matched:
             matched_targets += 1
+        elif mode == "position":
+            unmatched_target_rects.append(
+                (float(rect_norm[0]), float(rect_norm[1]), float(rect_norm[2]), float(rect_norm[3]))
+            )
 
     total_targets = len(targets)
     ocr_id = app._extract_ocr_id_from_result(result0)
     ocr_sub_id = app._extract_ocr_sub_id_from_result(result0)
     app._detect_last_ocr_id = ocr_id
     app._detect_last_ocr_sub_id = ocr_sub_id
+    if mode == "position":
+        app._detect_spatial_mismatch_rects_norm = unmatched_target_rects
     avg_iou = sum(best_ious) / max(1, len(best_ious))
     msg = f"{matched_targets}/{total_targets} matched, avg IoU={avg_iou:.3f}"
     if app._should_use_background_cut_detection():

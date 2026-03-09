@@ -143,10 +143,10 @@ def _detect_tick_video(app: Any) -> None:
         except Exception:
             pass
         return
-    plotted = app._render_detect_result(results[0], line_width=1)
     app._detect_video_frame_idx = getattr(app, "_detect_video_frame_idx", 0) + 1
     app._detect_video_frame_idx = app._detect_video_frame_idx
     verdict, detail = app._evaluate_golden_match(results[0])
+    plotted = app._render_detect_result(results[0], line_width=1)
     app._set_detect_verdict(verdict, detail)
     frame_name = f"frame_{app._detect_video_frame_idx:06d}"
     app._append_detect_report_row(frame_name, results[0], verdict, detail)
