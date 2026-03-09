@@ -1,32 +1,10 @@
-"""
-Detection Report Generator v2
-==============================
-Usage:
-    python detection_report_generator.py <input.csv or input.xlsx>
-
-Auto-detects format:
-  Format A (full): timestamp, image_name, detected_classes, golden_mode, iou_threshold, status, details
-  Format B (simple): timestamp, image_name, detected_classes
-
-Outputs (same folder as input):
-    *_report.xlsx
-    *_dashboard.html
-    *_dashboard.pdf
-"""
-
 import sys, re, os, json
 from collections import defaultdict, Counter
 import pandas as pd
-import openpyxl
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.chart import BarChart, PieChart, Reference
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.chart import BarChart, Reference
 from openpyxl.utils import get_column_letter
-
-
-# ══════════════════════════════════════════════
-# 1. PARSING & AGGREGATION
-# ══════════════════════════════════════════════
 
 def load_data(path):
     ext = os.path.splitext(path)[1].lower()
@@ -123,15 +101,9 @@ def aggregate(records):
     sorted_classes = sorted(class_totals.items(), key=lambda x: x[1], reverse=True)
     return sorted_classes, class_img_count, prefix_stats, status_counts, iou_values
 
-
-# ══════════════════════════════════════════════
-# 2. EXCEL REPORT
-# ══════════════════════════════════════════════
-
 def build_excel(records, sorted_classes, class_img_count, prefix_stats,
                 status_counts, iou_values, has_golden, out_path):
 
-    # ── styles ──
     H_FILL  = PatternFill("solid", start_color="1A3A5C")
     H_FONT  = Font(bold=True, color="FFFFFF", name="Calibri", size=10)
     S_FILL  = PatternFill("solid", start_color="2E75B6")
@@ -178,7 +150,6 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
     na_cnt     = total_img - fail_cnt - pass_cnt
     pass_rate  = round(pass_cnt / total_img * 100, 1) if total_img else 0
 
-    # ── Sheet 1: Raw Data ──────────────────────────────────────
     ws = wb.active
     ws.title = "Raw Data"
 
@@ -224,13 +195,11 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
 
     ws.freeze_panes = "A2"
 
-    # ── Sheet 2: Summary ───────────────────────────────────────
     ws2 = wb.create_sheet("Summary")
 
     shdr(ws2, 1, 1, "📊  Detection Summary Report", 4)
     ws2.row_dimensions[1].height = 26
 
-    # KPI block
     kpis = [("Total Images", total_img), ("PASS", pass_cnt), ("FAIL", fail_cnt)]
     if has_golden:
         kpis.append(("Pass Rate", f"{pass_rate}%"))
@@ -244,14 +213,12 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
         ws2.cell(row=i, column=1, value=metric).font = CELL_F
         c = ws2.cell(row=i, column=2, value=val)
         c.font = Font(name="Calibri", size=11, bold=True); c.fill = KPI_F
-        # colour PASS/FAIL values
         if metric == "PASS": c.font = Font(name="Calibri", size=11, bold=True, color="1A7A3C")
         if metric == "FAIL": c.font = Font(name="Calibri", size=11, bold=True, color="C00000")
 
     for col, w in zip(["A","B"], [28, 18]):
         ws2.column_dimensions[col].width = w
 
-    # Category breakdown
     start_row = 4 + len(kpis) + 2
     shdr(ws2, start_row, 1, "Results by Category", 5)
     if has_golden:
@@ -279,7 +246,6 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
     for col, w in zip(["C","D","E"], [10, 10, 12]):
         ws2.column_dimensions[col].width = w
 
-    # ── Sheet 3: Class Analysis ────────────────────────────────
     ws3 = wb.create_sheet("Class Analysis")
     shdr(ws3, 1, 1, "Component Class Detection Analysis", 4)
     thdr(ws3, 2, [(1,"Class"),(2,"Total Detected"),(3,"Images Found In"),(4,"Avg per Image")])
@@ -293,7 +259,6 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
     for col, w in zip(["A","B","C","D"], [22, 16, 20, 16]):
         ws3.column_dimensions[col].width = w
 
-    # Bar chart
     chart = BarChart()
     chart.type = "col"; chart.title = "Components by Class"
     chart.style = 10; chart.width = 22; chart.height = 13
@@ -302,14 +267,12 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
     chart.set_categories(Reference(ws3, min_col=1, min_row=3, max_row=last))
     ws3.add_chart(chart, "F2")
 
-    # ── Sheet 4: IoU Analysis (Format A only) ─────────────────
     if has_golden and iou_values:
         ws4 = wb.create_sheet("IoU Analysis")
         shdr(ws4, 1, 1, "IoU Score Analysis by Category", 4)
         thdr(ws4, 2, [(1,"Category"),(2,"Images"),(3,"PASS"),(4,"FAIL"),
                       (5,"Avg IoU"),(6,"Min IoU"),(7,"Max IoU")])
 
-        # compute per-cat IoU
         cat_iou = defaultdict(list)
         for r in records:
             if r["avg_iou"] is not None:
@@ -332,11 +295,6 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
     wb.save(out_path)
     print(f"  ✅ Excel → {out_path}")
 
-
-# ══════════════════════════════════════════════
-# 3. HTML DASHBOARD
-# ══════════════════════════════════════════════
-
 def build_html(records, sorted_classes, class_img_count, prefix_stats,
                status_counts, iou_values, has_golden, out_path):
 
@@ -352,7 +310,6 @@ def build_html(records, sorted_classes, class_img_count, prefix_stats,
     cat_data   = sorted(prefix_stats.items())
     grand      = sum(t for _, t in sorted_classes) or 1
 
-    # JSON data
     cls_labels = json.dumps([c for c, _ in sorted_classes])
     cls_totals = json.dumps([t for _, t in sorted_classes])
     cls_imgs   = json.dumps([class_img_count[c] for c, _ in sorted_classes])
@@ -362,7 +319,6 @@ def build_html(records, sorted_classes, class_img_count, prefix_stats,
     cat_pass   = json.dumps([s["pass"] for _, s in cat_data])
     cat_fail   = json.dumps([s["fail"] for _, s in cat_data])
 
-    # IoU histogram data (Format A)
     iou_hist_labels, iou_hist_vals = [], []
     if has_golden and iou_values:
         bins = [(i/10, (i+1)/10) for i in range(10)]
@@ -371,7 +327,6 @@ def build_html(records, sorted_classes, class_img_count, prefix_stats,
             iou_hist_vals.append(sum(1 for v in iou_values if lo <= v < hi))
         iou_hist_vals[-1] += sum(1 for v in iou_values if v == 1.0)
 
-    # Class table rows
     palette = ["#3b82f6","#06b6d4","#8b5cf6","#ec4899","#f97316",
                "#10b981","#f59e0b","#60a5fa","#ef4444","#6366f1","#22c55e","#84cc16"]
 
@@ -390,7 +345,6 @@ def build_html(records, sorted_classes, class_img_count, prefix_stats,
                      f'<div class="bar-bg"><div class="bar-fg" style="width:{bar_w}%;background:{color}80"></div></div></td>'
                      f'</tr>\n')
 
-    # Category table rows
     cat_rows = ""
     for prefix, stats in cat_data:
         avg = round(stats["total_components"]/stats["count"], 1) if stats["count"] else 0
@@ -628,11 +582,6 @@ new Chart(document.getElementById("catComp"),{{
         f.write(html)
     print(f"  ✅ HTML  → {out_path}")
 
-
-# ══════════════════════════════════════════════
-# 4. PDF REPORT
-# ══════════════════════════════════════════════
-
 def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
               status_counts, iou_values, has_golden, out_path):
     from reportlab.lib.pagesizes import A4
@@ -722,7 +671,6 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
 
     story = []
 
-    # ── COVER ──────────────────────────────────────────────────
     cov = Drawing(PW, 70)
     cov.add(Rect(0, 0, PW, 70, fillColor=DKBL, strokeColor=None, rx=4, ry=4))
     mode_txt = "GOLDEN COMPARISON MODE" if has_golden else "DETECTION-ONLY MODE"
@@ -733,7 +681,6 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
     story.append(cov)
     story.append(Spacer(1, 14))
 
-    # ── KPI CARDS ──────────────────────────────────────────────
     story.append(sec_bar("Overview"))
     story.append(Spacer(1, 8))
 
@@ -769,7 +716,6 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
     story.append(kd)
     story.append(Spacer(1, 16))
 
-    # ── BAR CHART: class totals ────────────────────────────────
     cls_names = [c for c, _ in sorted_classes]
     cls_vals  = [t for _, t in sorted_classes]
     if cls_vals:
@@ -792,7 +738,6 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
         story.append(d1)
         story.append(Spacer(1, 12))
 
-    # ── PIE CHART: category distribution ──────────────────────
     story.append(sec_bar("Image Distribution by Category"))
     story.append(Spacer(1, 8))
     pie_size   = 150
@@ -818,7 +763,6 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
     story.append(pie_d)
     story.append(Spacer(1, 12))
 
-    # ── PASS/FAIL per category table (Format A) ───────────────
     if has_golden:
         story.append(sec_bar("Pass / Fail Summary by Category",
                               f"IoU threshold: {records[0]['iou_threshold']}"))
@@ -831,7 +775,6 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
             rows.append([prefix, stats["count"], stats["pass"], stats["fail"], rate, avg_i])
         cws = [PW*f for f in [0.28, 0.12, 0.12, 0.12, 0.18, 0.18]]
         t = mk_table(hdr, rows, cws)
-        # colour pass/fail columns
         for ri, row in enumerate(rows, 1):
             t.setStyle(TableStyle([
                 ("TEXTCOLOR", (2,ri),(2,ri), PASS),
@@ -842,7 +785,6 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
         story.append(t)
         story.append(Spacer(1, 12))
 
-    # ── CLASS BREAKDOWN TABLE ─────────────────────────────────
     story.append(sec_bar("Component Class Breakdown"))
     story.append(Spacer(1, 6))
     grand  = sum(cls_vals) or 1
@@ -856,7 +798,6 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
     story.append(mk_table(["Class","Total","Images","Avg/Image","Share"], c_rows, cws2))
     story.append(Spacer(1, 12))
 
-    # ── RAW DATA TABLE (page 2) ───────────────────────────────
     story.append(PageBreak())
     story.append(sec_bar(f"Raw Detection Data — first 60 rows of {len(records)}"))
     story.append(Spacer(1, 6))
@@ -896,11 +837,6 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
     print(f"  ✅ PDF   → {out_path}")
 
-
-# ══════════════════════════════════════════════
-# 5. MAIN
-# ══════════════════════════════════════════════
-
 def main():
     if len(sys.argv) < 2:
         print("Usage: python detection_report_generator.py <input.csv or input.xlsx>")
@@ -921,7 +857,6 @@ def main():
     fmt = "Format A (golden comparison)" if has_golden else "Format B (detection only)"
     print(f"   {len(records)} rows — {fmt}")
 
-    # Sort: FAIL first, then PASS, then others
     STATUS_ORDER = {"FAIL": 0, "PASS": 1}
     records.sort(key=lambda r: STATUS_ORDER.get(r["status"].upper(), 2))
 

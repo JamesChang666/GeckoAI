@@ -1,17 +1,14 @@
 import os
 import sys
-import tkinter as tk
 
 if __package__ in {None, ""}:
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from ai_labeller.main import GeckoAI
+from ai_labeller.app_entry import run_window_mode
 
 
 def main() -> None:
-    root = tk.Tk()
-    GeckoAI(root, startup_mode="detect")
-    root.mainloop()
+    run_window_mode("detect")
 
 
 if __name__ == "__main__":

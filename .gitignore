@@ -5,3 +5,4 @@ dist/
 .github/workflows/venv/
 *.pt
 !src/ai_labeller/models/*.pt
+example/gen1/.ai_labeller_progress.yaml

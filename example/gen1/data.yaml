@@ -1,0 +1,6 @@
+path: dataset/gen1
+train: images  
+val: images  
+
+nc: 2
+names: ["0: ball", "1: tag"]

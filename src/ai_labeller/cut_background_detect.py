@@ -10,6 +10,8 @@ import numpy as np
 from PIL import Image, ImageEnhance
 from tkinter import filedialog, messagebox
 
+from ai_labeller.core.geometry import calculate_iou
+
 
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
 
@@ -198,24 +200,11 @@ def _find_rois_by_minmax(
     selected: list[tuple[int, int, float]] = []
     boxes: list[tuple[int, int, int, int]] = []
 
-    def iou(box_a: tuple[int, int, int, int], box_b: tuple[int, int, int, int]) -> float:
-        xa1, ya1, xa2, ya2 = box_a
-        xb1, yb1, xb2, yb2 = box_b
-        xi1, yi1 = max(xa1, xb1), max(ya1, yb1)
-        xi2, yi2 = min(xa2, xb2), min(ya2, yb2)
-        inter = max(0, xi2 - xi1) * max(0, yi2 - yi1)
-        union = (
-            (max(0, xa2 - xa1) * max(0, ya2 - ya1))
-            + (max(0, xb2 - xb1) * max(0, yb2 - yb1))
-            - inter
-        )
-        return (inter / union) if union > 0 else 0.0
-
     for x, y, score in candidates:
         if len(selected) >= max_matches:
             break
         box = (x, y, x + templ_w, y + templ_h)
-        if any(iou(box, existing) > overlap_thresh for existing in boxes):
+        if any(calculate_iou(list(box), list(existing)) > overlap_thresh for existing in boxes):
             continue
         selected.append((x, y, score))
         boxes.append(box)
