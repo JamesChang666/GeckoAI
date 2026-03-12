@@ -15,7 +15,7 @@ except Exception:
     cv2 = None
     HAS_CV2 = False
 
-from tkinter import messagebox
+from ai_labeller.dialogs import messagebox
 
 
 def open_image_as_pil(app: Any, path: str, convert: str | None = "RGB", parent: Any = None):

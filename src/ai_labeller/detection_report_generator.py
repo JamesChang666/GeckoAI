@@ -22,14 +22,43 @@ def _safe_detect_image_name(image_name):
     return root + ext
 
 
-def _resolve_detect_image_path(csv_path, image_name):
+def _resolve_detect_image_path(csv_path, image_name, detect_image_path=""):
+    direct = str(detect_image_path or "").strip()
+    if direct and os.path.isfile(direct):
+        return os.path.abspath(direct)
     detect_dir = os.path.join(os.path.dirname(os.path.abspath(csv_path)), "detected_images")
     if not os.path.isdir(detect_dir):
         return ""
     candidate = os.path.join(detect_dir, _safe_detect_image_name(image_name))
     if os.path.isfile(candidate):
         return os.path.abspath(candidate)
+    # Backward-compatible fallback for renamed files (e.g. id/sub_id naming).
+    safe = _safe_detect_image_name(image_name)
+    safe_root, _safe_ext = os.path.splitext(safe)
+    for name in os.listdir(detect_dir):
+        p = os.path.join(detect_dir, name)
+        if not os.path.isfile(p):
+            continue
+        root, _ext = os.path.splitext(name)
+        if root == safe_root or root.startswith(safe_root + "_"):
+            return os.path.abspath(p)
     return ""
+
+
+def _record_id_key(row):
+    raw_id = _valid_token(row.get("id", ""))
+    raw_sub = _valid_token(row.get("sub_id", ""))
+    name = str(row.get("image_name", "")).strip()
+    board = _board_name_from_image_name(name)
+    if raw_id and raw_sub:
+        return f"{raw_id}/{raw_sub}"
+    if raw_id:
+        return raw_id
+    if raw_sub:
+        return f"{board}/{raw_sub}" if board else raw_sub
+    if board:
+        return board
+    return name or "unknown"
 
 
 def _parse_yolo_rects(label_path):
@@ -142,11 +171,14 @@ def load_data(path):
         records.append({
             "timestamp":        str(row.get("timestamp", "")).strip(),
             "image_name":       name,
-            "prefix":           get_prefix(name),
+            "id":               str(row.get("id", "")).strip(),
+            "sub_id":           str(row.get("sub_id", "")).strip(),
+            "prefix":           _record_id_key({"id": row.get("id", ""), "image_name": name}),
             "detected_classes": detected,
             "golden_mode":      str(row.get("golden_mode", "—")).strip() if has_golden else "—",
             "iou_threshold":    str(row.get("iou_threshold", "—")).strip() if has_golden else "—",
             "status":           status,
+            "reason":           str(row.get("reason", "")).strip() if has_golden else "",
             "details":          details,
             "avg_iou":          iou_val,
             "matched":          matched,
@@ -157,7 +189,11 @@ def load_data(path):
             "has_golden":       has_golden,
             "golden_image_path": str(row.get("golden_image_path", "")).strip() if has_golden else "",
             "golden_label_path": str(row.get("golden_label_path", "")).strip() if has_golden else "",
-            "detect_image_path": _resolve_detect_image_path(path, name),
+            "detect_image_path": _resolve_detect_image_path(
+                path,
+                name,
+                str(row.get("detect_image_path", "")).strip(),
+            ),
         })
     return records, has_golden
 
@@ -184,10 +220,107 @@ def parse_matched(d):
 
 
 def get_prefix(name):
-    for prefix in ("back_crop", "empty_crop", "train_crop", "crop"):
-        if name.startswith(prefix):
-            return prefix
-    return "other"
+    return str(name or "").strip() or "unknown"
+
+
+def _valid_token(raw):
+    text = str(raw or "").strip()
+    bad = {"", "none", "null", "n/a", "na", "no_id", "unreadable_id", "no_sub_id", "unreadable_sub_id", "無"}
+    return text if text.lower() not in bad else ""
+
+
+def _board_name_from_image_name(image_name):
+    name = str(image_name or "").strip()
+    if "::" in name:
+        name = name.split("::", 1)[0].strip()
+    base = os.path.splitext(os.path.basename(name))[0]
+    # Normalize piece/cut suffixes so reports can group by pre-cut board.
+    base = re.sub(r"(_piece_\d+)$", "", base, flags=re.IGNORECASE)
+    base = re.sub(r"(_cut_\d+(?:_\d+)?)$", "", base, flags=re.IGNORECASE)
+    return base or ""
+
+
+def _board_key(record):
+    id_text = _valid_token(record.get("id", ""))
+    if id_text:
+        return id_text
+    root = _board_name_from_image_name(record.get("image_name", ""))
+    return root or "unknown"
+
+
+def _is_piece_record(record):
+    name = str(record.get("image_name", "")).strip().lower()
+    sub_id = _valid_token(record.get("sub_id", ""))
+    if sub_id:
+        return True
+    return ("_piece_" in name) or ("_cut_" in name)
+
+
+def _piece_number_from_image_name(image_name):
+    name = str(image_name or "").strip()
+    if "::" in name:
+        name = name.split("::", 1)[0].strip()
+    base = os.path.splitext(os.path.basename(name))[0]
+    m = re.search(r"_piece_(\d+)$", base, flags=re.IGNORECASE)
+    if not m:
+        m = re.search(r"_cut_(\d+)(?:_\d+)?$", base, flags=re.IGNORECASE)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except Exception:
+        return None
+
+
+def build_supervisor_metrics(records):
+    board_keys = set()
+    board_fail = set()
+    piece_total = 0
+    piece_ok = 0
+    piece_fail = 0
+    part_total = defaultdict(int)
+    part_fail = defaultdict(int)
+
+    for r in records:
+        bkey = _board_key(r)
+        board_keys.add(bkey)
+        status = str(r.get("status", "")).strip().upper()
+        if status == "FAIL":
+            board_fail.add(bkey)
+        if _is_piece_record(r):
+            piece_total += 1
+            if status == "PASS":
+                piece_ok += 1
+            elif status == "FAIL":
+                piece_fail += 1
+        cls_dict = r.get("classes_dict", {}) or {}
+        for cls, cnt in cls_dict.items():
+            n = int(cnt)
+            part_total[cls] += n
+            if status == "FAIL":
+                part_fail[cls] += n
+
+    part_rows = []
+    for cls in sorted(part_total.keys(), key=lambda k: part_total[k], reverse=True):
+        total = int(part_total[cls])
+        fail = int(part_fail.get(cls, 0))
+        fail_rate = (fail / total * 100.0) if total > 0 else 0.0
+        part_rows.append((cls, total, fail, fail_rate))
+
+    board_total = len(board_keys)
+    board_ng = len(board_fail)
+    board_ok = max(0, board_total - board_ng)
+    piece_ng_rate = (piece_fail / piece_total * 100.0) if piece_total > 0 else 0.0
+    return {
+        "board_total": board_total,
+        "board_ok": board_ok,
+        "board_ng": board_ng,
+        "piece_total": piece_total,
+        "piece_ok": piece_ok,
+        "piece_fail": piece_fail,
+        "piece_fail_rate": piece_ng_rate,
+        "part_rows": part_rows,
+    }
 
 
 def aggregate(records):
@@ -272,13 +405,13 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
     ws.title = "Raw Data"
 
     if has_golden:
-        headers    = ["Timestamp", "Image Name", "Status", "Category",
+        headers    = ["Timestamp", "Image Name", "Status", "Reason", "ID",
                       "Detected Classes", "IoU Mode", "IoU Threshold",
                       "Matched/Total", "Avg IoU", "Details", "Components", "# Classes"]
-        col_widths = [20, 22, 9, 12, 55, 10, 14, 14, 10, 30, 12, 10]
+        col_widths = [20, 22, 9, 24, 12, 55, 10, 14, 14, 10, 30, 12, 10]
         STATUS_COL = 3
     else:
-        headers    = ["Timestamp", "Image Name", "Category",
+        headers    = ["Timestamp", "Image Name", "ID",
                       "Detected Classes", "Components", "# Classes"]
         col_widths = [20, 22, 12, 70, 12, 10]
         STATUS_COL = None
@@ -295,7 +428,7 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
         if has_golden:
             matched_str = f"{r['matched']}/{r['total']}" if r['matched'] is not None else "—"
             iou_str     = f"{r['avg_iou']:.3f}" if r['avg_iou'] is not None else "—"
-            vals = [r["timestamp"], r["image_name"], r["status"], r["prefix"],
+            vals = [r["timestamp"], r["image_name"], r["status"], r.get("reason", ""), r["prefix"],
                     r["detected_classes"], r["golden_mode"], r["iou_threshold"],
                     matched_str, iou_str, r["details"],
                     r["total_components"], r["num_classes"]]
@@ -306,7 +439,7 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
         for col, val in enumerate(vals, 1):
             cell = ws.cell(row=i, column=col, value=val)
             cell.font = CELL_F; cell.fill = row_fill
-            cell.alignment = Alignment(vertical="center", wrap_text=(col == (5 if has_golden else 4)))
+            cell.alignment = Alignment(vertical="center", wrap_text=(col == (6 if has_golden else 4)))
 
         if STATUS_COL:
             status_style(ws, i, STATUS_COL, r["status"])
@@ -337,12 +470,42 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
     for col, w in zip(["A","B"], [28, 18]):
         ws2.column_dimensions[col].width = w
 
-    start_row = 4 + len(kpis) + 2
-    shdr(ws2, start_row, 1, "Results by Category", 5)
+    sup = build_supervisor_metrics(records)
+    sup_row = 4 + len(kpis) + 2
+    shdr(ws2, sup_row, 1, "Production Summary", 4)
+    thdr(ws2, sup_row + 1, [(1, "Metric"), (2, "Value"), (3, "Metric"), (4, "Value")])
+    sup_items = [
+        ("Boards (before cut)", sup["board_total"], "Board OK", sup["board_ok"]),
+        ("Board NG", sup["board_ng"], "Pieces (after cut)", sup["piece_total"]),
+        ("Piece OK", sup["piece_ok"], "Piece NG", sup["piece_fail"]),
+        ("Piece NG Rate", f"{sup['piece_fail_rate']:.1f}%", "", ""),
+    ]
+    for i, (m1, v1, m2, v2) in enumerate(sup_items, sup_row + 2):
+        fill = ALT_F if i % 2 == 0 else PatternFill("solid", start_color="FFFFFF")
+        ws2.cell(row=i, column=1, value=m1).font = CELL_F
+        ws2.cell(row=i, column=2, value=v1).font = CELL_F
+        ws2.cell(row=i, column=3, value=m2).font = CELL_F
+        ws2.cell(row=i, column=4, value=v2).font = CELL_F
+        for col in (1, 2, 3, 4):
+            ws2.cell(row=i, column=col).fill = fill
+
+    part_row = sup_row + 7
+    shdr(ws2, part_row, 1, "Part Failure Rate", 4)
+    thdr(ws2, part_row + 1, [(1, "Part"), (2, "Total Qty"), (3, "NG Qty"), (4, "NG %")])
+    for i, (part, total, fail, rate) in enumerate(sup["part_rows"], part_row + 2):
+        fill = ALT_F if i % 2 == 0 else PatternFill("solid", start_color="FFFFFF")
+        vals = [part, total, fail, f"{rate:.1f}%"]
+        for col, val in enumerate(vals, 1):
+            c = ws2.cell(row=i, column=col, value=val)
+            c.font = CELL_F
+            c.fill = fill
+
+    start_row = part_row + 3 + len(sup["part_rows"])
+    shdr(ws2, start_row, 1, "Results by ID", 5)
     if has_golden:
-        thdr(ws2, start_row+1, [(1,"Category"),(2,"Images"),(3,"PASS"),(4,"FAIL"),(5,"Avg IoU")])
+        thdr(ws2, start_row+1, [(1,"ID"),(2,"Images"),(3,"PASS"),(4,"FAIL"),(5,"Avg IoU")])
     else:
-        thdr(ws2, start_row+1, [(1,"Category"),(2,"Images"),(3,"Total Components"),(4,"Avg Comp/Image"),(5,"")])
+        thdr(ws2, start_row+1, [(1,"ID"),(2,"Images"),(3,"Total Components"),(4,"Avg Comp/Image"),(5,"")])
 
     for r_idx, (prefix, stats) in enumerate(sorted(prefix_stats.items()), start_row+2):
         fill = ALT_F if r_idx % 2 == 0 else PatternFill("solid", start_color="FFFFFF")
@@ -364,31 +527,102 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
     for col, w in zip(["C","D","E"], [10, 10, 12]):
         ws2.column_dimensions[col].width = w
 
+    if has_golden and len(prefix_stats) > 0:
+        id_last = start_row + 1 + len(prefix_stats)
+        id_chart = BarChart()
+        id_chart.type = "col"
+        id_chart.title = "Images by ID (PASS/FAIL)"
+        id_chart.style = 10
+        id_chart.width = 18
+        id_chart.height = 10
+        id_chart.grouping = "clustered"
+        id_chart.overlap = 0
+        id_chart.add_data(
+            Reference(ws2, min_col=3, max_col=4, min_row=start_row + 1, max_row=id_last),
+            titles_from_data=True,
+        )
+        id_chart.set_categories(Reference(ws2, min_col=1, min_row=start_row + 2, max_row=id_last))
+        try:
+            id_chart.series[0].graphicalProperties.solidFill = "22C55E"
+            id_chart.series[0].graphicalProperties.line.solidFill = "22C55E"
+            id_chart.series[1].graphicalProperties.solidFill = "EF4444"
+            id_chart.series[1].graphicalProperties.line.solidFill = "EF4444"
+        except Exception:
+            pass
+        ws2.add_chart(id_chart, "G2")
+
     ws3 = wb.create_sheet("Class Analysis")
-    shdr(ws3, 1, 1, "Component Class Detection Analysis", 4)
-    thdr(ws3, 2, [(1,"Class"),(2,"Total Detected"),(3,"Images Found In"),(4,"Avg per Image")])
+    if has_golden:
+        shdr(ws3, 1, 1, "Component Class Detection Analysis (PASS/FAIL)", 6)
+        thdr(
+            ws3,
+            2,
+            [
+                (1, "Class"),
+                (2, "Total Detected"),
+                (3, "Images Found In"),
+                (4, "Avg per Image"),
+                (5, "PASS Components"),
+                (6, "FAIL Components"),
+            ],
+        )
+    else:
+        shdr(ws3, 1, 1, "Component Class Detection Analysis", 4)
+        thdr(ws3, 2, [(1,"Class"),(2,"Total Detected"),(3,"Images Found In"),(4,"Avg per Image")])
+
+    class_pass_totals = defaultdict(int)
+    class_fail_totals = defaultdict(int)
+    if has_golden:
+        for r in records:
+            status = str(r.get("status", "")).strip().upper()
+            for cls, cnt in (r.get("classes_dict") or {}).items():
+                if status == "PASS":
+                    class_pass_totals[cls] += int(cnt)
+                elif status == "FAIL":
+                    class_fail_totals[cls] += int(cnt)
+
     for i, (cls, total) in enumerate(sorted_classes, 3):
         img_cnt = class_img_count[cls]
         avg     = round(total/img_cnt, 2) if img_cnt else 0
         fill    = ALT_F if i % 2 == 0 else PatternFill("solid", start_color="FFFFFF")
-        for col, val in enumerate([cls, total, img_cnt, avg], 1):
+        if has_golden:
+            vals = [cls, total, img_cnt, avg, class_pass_totals.get(cls, 0), class_fail_totals.get(cls, 0)]
+        else:
+            vals = [cls, total, img_cnt, avg]
+        for col, val in enumerate(vals, 1):
             c = ws3.cell(row=i, column=col, value=val)
             c.font = CELL_F; c.fill = fill
-    for col, w in zip(["A","B","C","D"], [22, 16, 20, 16]):
-        ws3.column_dimensions[col].width = w
+    if has_golden:
+        for col, w in zip(["A","B","C","D","E","F"], [22, 16, 20, 16, 16, 16]):
+            ws3.column_dimensions[col].width = w
+    else:
+        for col, w in zip(["A","B","C","D"], [22, 16, 20, 16]):
+            ws3.column_dimensions[col].width = w
 
     chart = BarChart()
     chart.type = "col"; chart.title = "Components by Class"
     chart.style = 10; chart.width = 22; chart.height = 13
     last = 2 + len(sorted_classes)
-    chart.add_data(Reference(ws3, min_col=2, min_row=2, max_row=last), titles_from_data=True)
+    if has_golden:
+        chart.grouping = "clustered"
+        chart.overlap = 0
+        chart.add_data(Reference(ws3, min_col=5, max_col=6, min_row=2, max_row=last), titles_from_data=True)
+        try:
+            chart.series[0].graphicalProperties.solidFill = "22C55E"
+            chart.series[0].graphicalProperties.line.solidFill = "22C55E"
+            chart.series[1].graphicalProperties.solidFill = "EF4444"
+            chart.series[1].graphicalProperties.line.solidFill = "EF4444"
+        except Exception:
+            pass
+    else:
+        chart.add_data(Reference(ws3, min_col=2, min_row=2, max_row=last), titles_from_data=True)
     chart.set_categories(Reference(ws3, min_col=1, min_row=3, max_row=last))
     ws3.add_chart(chart, "F2")
 
     if has_golden and iou_values:
         ws4 = wb.create_sheet("IoU Analysis")
-        shdr(ws4, 1, 1, "IoU Score Analysis by Category", 4)
-        thdr(ws4, 2, [(1,"Category"),(2,"Images"),(3,"PASS"),(4,"FAIL"),
+        shdr(ws4, 1, 1, "IoU Score Analysis by ID", 4)
+        thdr(ws4, 2, [(1,"ID"),(2,"Images"),(3,"PASS"),(4,"FAIL"),
                       (5,"Avg IoU"),(6,"Min IoU"),(7,"Max IoU")])
 
         cat_iou = defaultdict(list)
@@ -424,6 +658,7 @@ def build_html(records, sorted_classes, class_img_count, prefix_stats,
     avg_comp   = round(total_comp/total_img, 1) if total_img else 0
     avg_iou    = round(sum(iou_values)/len(iou_values), 3) if iou_values else None
     ts_label   = str(records[0]["timestamp"]) if records else "N/A"
+    sup = build_supervisor_metrics(records)
 
     cat_data   = sorted(prefix_stats.items())
     grand      = sum(t for _, t in sorted_classes) or 1
@@ -436,6 +671,20 @@ def build_html(records, sorted_classes, class_img_count, prefix_stats,
     cat_comps  = json.dumps([s["total_components"] for _, s in cat_data])
     cat_pass   = json.dumps([s["pass"] for _, s in cat_data])
     cat_fail   = json.dumps([s["fail"] for _, s in cat_data])
+    class_pass = []
+    class_fail = []
+    if has_golden:
+        class_pass_map = defaultdict(int)
+        class_fail_map = defaultdict(int)
+        for r in records:
+            status = str(r.get("status", "")).strip().upper()
+            for cls, cnt in (r.get("classes_dict") or {}).items():
+                if status == "PASS":
+                    class_pass_map[cls] += int(cnt)
+                elif status == "FAIL":
+                    class_fail_map[cls] += int(cnt)
+        class_pass = [class_pass_map.get(c, 0) for c, _ in sorted_classes]
+        class_fail = [class_fail_map.get(c, 0) for c, _ in sorted_classes]
 
     iou_hist_labels, iou_hist_vals = [], []
     if has_golden and iou_values:
@@ -479,24 +728,35 @@ def build_html(records, sorted_classes, class_img_count, prefix_stats,
                       f'<td>{pass_badge} {fail_badge}</td>'
                       f'</tr>\n')
 
+    sup_cards = (
+        f'<div class="kpi green"><div class="val">{sup["board_total"]}</div><div class="lbl">Boards (Before Cut)</div></div>'
+        f'<div class="kpi green"><div class="val">{sup["piece_total"]}</div><div class="lbl">Pieces (After Cut)</div></div>'
+        f'<div class="kpi red"><div class="val">{sup["piece_fail"]}</div><div class="lbl">Piece NG</div></div>'
+        f'<div class="kpi blue"><div class="val">{sup["piece_ok"]}</div><div class="lbl">Piece OK</div></div>'
+        f'<div class="kpi yellow"><div class="val">{sup["piece_fail_rate"]:.1f}%</div><div class="lbl">Piece NG Rate</div></div>'
+    )
+    part_rows_html = ""
+    for part, total, fail, rate in sup["part_rows"]:
+        part_rows_html += (
+            f"<tr><td>{part}</td><td class='num'>{total}</td><td class='num'>{fail}</td><td class='num'>{rate:.1f}%</td></tr>\n"
+        )
+
     iou_th     = '<th>Avg IoU</th>' if has_golden else ''
     iou_chart  = ""
     iou_kpi    = ""
     pass_fail_chart = ""
     compare_section = ""
+    warning_banner_html = ""
+    piece_heatmap_html = ""
 
     if has_golden:
         iou_kpi = f'<div class="kpi blue"><div class="val">{avg_iou if avg_iou else "—"}</div><div class="lbl">Avg IoU</div></div>'
         iou_chart = f"""
     <div class="card">
-      <h3>IoU Score Distribution</h3>
-      <canvas id="iouHist" height="200"></canvas>
+      <div class="card-title">IoU Score Distribution</div>
+      <canvas id="iouHist" class="chart-canvas"></canvas>
     </div>"""
-        pass_fail_chart = f"""
-    <div class="card">
-      <h3>PASS vs FAIL per Category</h3>
-      <canvas id="passFail" height="200"></canvas>
-    </div>"""
+        pass_fail_chart = ""
         golden_image_path = ""
         golden_label_path = ""
         for r in records:
@@ -513,28 +773,101 @@ def build_html(records, sorted_classes, class_img_count, prefix_stats,
         golden_preview_uri = _golden_labeled_data_uri(golden_image_path, golden_label_path, max_side=1600)
         cmp_rows = ""
         for r in records:
+            status = str(r.get("status", "")).strip().upper() or "N/A"
+            if status != "FAIL":
+                continue
             det_img_uri = _image_to_data_uri(str(r.get("detect_image_path", "")).strip(), max_side=1280)
             if not det_img_uri:
                 continue
-            status = str(r.get("status", "")).strip().upper() or "N/A"
             status_cls = "status-pass" if status == "PASS" else ("status-fail" if status == "FAIL" else "status-na")
             img_name = str(r.get("image_name", "")).strip()
             details = str(r.get("details", "")).strip()
+            reason_text = str(r.get("reason", "")).strip() or "n/a"
             golden_html = f'<img src="{golden_preview_uri}" loading="lazy" />' if golden_preview_uri else '<div class="cmp-empty">Golden sample not available</div>'
             details_html = f'<div class="cmp-detail">{details}</div>' if details else ""
             cmp_rows += (
                 f'<div class="cmp-card">'
                 f'<div class="cmp-head"><span class="cmp-name">{img_name}</span><span class="cmp-status {status_cls}">{status}</span></div>'
+                f'<div class="cmp-reason"><strong>Reason:</strong> {reason_text}</div>'
                 f'<div class="cmp-grid">'
                 f'<div class="cmp-pane"><div class="cmp-title">Golden Sample (Labeled)</div>{golden_html}</div>'
                 f'<div class="cmp-pane"><div class="cmp-title">Detected Result</div><img src="{det_img_uri}" loading="lazy" /></div>'
                 f'</div>{details_html}</div>'
             )
         compare_section = (
-            '<div class="card"><h3>Golden vs Detection Comparison</h3>'
-            + (cmp_rows if cmp_rows else '<div class="cmp-empty">No detected images found for comparison.</div>')
+            '<div class="card"><div class="card-title">Golden vs Detection Comparison (FAIL only)</div>'
+            + (cmp_rows if cmp_rows else '<div class="cmp-empty">No FAIL images found for comparison.</div>')
             + '</div>'
         )
+
+        piece_by_board: dict[str, dict[int, str]] = defaultdict(dict)
+        board_fail_sets: dict[str, set[int]] = defaultdict(set)
+        for r in records:
+            if not _is_piece_record(r):
+                continue
+            pnum = _piece_number_from_image_name(r.get("image_name", ""))
+            if pnum is None:
+                continue
+            board = _board_key(r)
+            status = str(r.get("status", "")).strip().upper()
+            prev = piece_by_board[board].get(pnum, "")
+            if status == "FAIL" or prev != "FAIL":
+                piece_by_board[board][pnum] = status if status in {"PASS", "FAIL"} else "N/A"
+            if status == "FAIL":
+                board_fail_sets[board].add(pnum)
+
+        if piece_by_board:
+            heat_cards = []
+            for board, piece_map in sorted(piece_by_board.items(), key=lambda kv: str(kv[0])):
+                if not piece_map:
+                    continue
+                max_piece = max(piece_map.keys())
+                cells = []
+                for idx in range(1, max_piece + 1):
+                    st = piece_map.get(idx, "N/A")
+                    cls = "pass" if st == "PASS" else ("fail" if st == "FAIL" else "nd-pass")
+                    title = f"p{idx:03d} - {st}"
+                    cells.append(f'<div class="pc {cls}" title="{title}">p{idx:03d}</div>')
+                fail_n = sum(1 for v in piece_map.values() if v == "FAIL")
+                pass_n = sum(1 for v in piece_map.values() if v == "PASS")
+                heat_cards.append(
+                    '<div class="card">'
+                    f'<div class="card-title">{board} <small>{len(piece_map)} pieces</small></div>'
+                    f'<div class="badge-row"><span class="badge pass">PASS {pass_n}</span> <span class="badge fail">FAIL {fail_n}</span></div>'
+                    f'<div class="hm-wrap"><div class="hm-grid">{"".join(cells)}</div></div>'
+                    '</div>'
+                )
+            piece_heatmap_html = (
+                '<div class="section-label">Piece Heatmap</div>'
+                '<div class="card"><div class="legend-row">'
+                '<div class="li"><div class="ld" style="background:rgba(0,214,143,.45)"></div>PASS</div>'
+                '<div class="li"><div class="ld" style="background:rgba(255,59,48,.75)"></div>FAIL</div>'
+                '<div class="li"><div class="ld" style="background:rgba(74,158,255,.35)"></div>No Data</div>'
+                '</div></div>'
+                '<div class="row2">'
+                + "".join(heat_cards)
+                + '</div>'
+            )
+
+        if sup["piece_total"] > 0 and sup["piece_fail"] > 0:
+            fail_positions = sorted({p for s in board_fail_sets.values() for p in s})
+            fail_pos_text = ", ".join(f"p{n:03d}" for n in fail_positions) if fail_positions else "none"
+            sets = [s for s in board_fail_sets.values() if s]
+            same_positions = len(sets) >= 2 and all(s == sets[0] for s in sets[1:])
+            if same_positions and fail_positions:
+                tail_msg = "All boards share identical fail positions, strongly indicating a fixed-position missing-part issue. Check feeder/supply at these positions first."
+            elif fail_positions:
+                tail_msg = "Fail positions show repeated hotspots across boards. Check recurring positions and feeder/supply stability first."
+            else:
+                tail_msg = "This batch contains failed pieces. Check fixture, feeder/supply, and lighting stability."
+            warning_banner_html = (
+                '<div class="banner amber">'
+                '<div class="banner-icon">⚠</div>'
+                '<div class="banner-body">'
+                f'<h3>Localized Failure: {sup["piece_fail"]} FAIL pieces ({sup["piece_fail_rate"]:.1f}%)</h3>'
+                f'<p>Fail positions: {fail_pos_text}. {tail_msg}</p>'
+                '</div></div>'
+            )
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -543,52 +876,58 @@ def build_html(records, sorted_classes, class_img_count, prefix_stats,
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Detection Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
 :root {{
-  --bg:      #0a0f1e;
-  --surface: #111827;
-  --card:    #1a2236;
-  --border:  #243048;
-  --text:    #e2e8f0;
-  --muted:   #64748b;
+  --bg:      #0d0f14;
+  --surface: #141720;
+  --card:    #1c2030;
+  --border:  #252a3a;
+  --text:    #e8ecf4;
+  --muted:   #7a849a;
   --pass:    #22c55e;
   --fail:    #ef4444;
   --blue:    #3b82f6;
-  --cyan:    #06b6d4;
+  --amber:   #f59e0b;
   --purple:  #8b5cf6;
+  --dim:     #4a5266;
 }}
 * {{ box-sizing:border-box; margin:0; padding:0 }}
 body {{ font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); min-height:100vh }}
 
 header {{
-  background: linear-gradient(135deg, #0f1f3d 0%, #1a2a4d 50%, #162238 100%);
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
   padding: 0;
 }}
-.header-inner {{
-  max-width:1400px; margin:0 auto; padding:20px 32px;
-  display:flex; align-items:center; gap:20px;
-}}
+    .header-inner {{
+      max-width:100%; margin:0 auto; padding:20px 24px;
+      display:flex; align-items:center; gap:20px;
+    }}
 .header-icon {{
   width:48px; height:48px; border-radius:12px;
   background:linear-gradient(135deg,#3b82f6,#8b5cf6);
   display:flex; align-items:center; justify-content:center;
-  font-size:22px; flex-shrink:0;
+  font-size:13px; font-weight:700; font-family:'IBM Plex Mono',monospace; letter-spacing:.08em; flex-shrink:0;
 }}
 .header-text h1 {{ font-size:20px; font-weight:700; letter-spacing:-0.3px }}
-.header-text p  {{ font-size:12px; color:var(--muted); margin-top:3px; font-family:'JetBrains Mono',monospace }}
+.header-text p  {{ font-size:12px; color:var(--muted); margin-top:3px; font-family:'IBM Plex Mono',monospace }}
 .mode-badge {{
   margin-left:auto; padding:6px 14px; border-radius:20px; font-size:11px;
-  font-weight:600; font-family:'JetBrains Mono',monospace; letter-spacing:0.5px;
+  font-weight:600; font-family:'IBM Plex Mono',monospace; letter-spacing:0.5px;
   background: {'#1a3a1a; color:#22c55e; border:1px solid #22c55e40' if has_golden else '#1a1a3a; color:#8b5cf6; border:1px solid #8b5cf640'};
 }}
 
-.container {{ max-width:1400px; margin:0 auto; padding:24px 32px }}
+    .container {{ max-width:100%; margin:0 auto; padding:24px 24px }}
+.section-label {{
+  font-family:'IBM Plex Mono',monospace; font-size:10px; font-weight:600; letter-spacing:.2em;
+  text-transform:uppercase; color:var(--dim); margin:4px 0 12px 0;
+  padding-bottom:8px; border-bottom:1px solid var(--border);
+}}
 
 /* KPI */
-.kpi-row {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:14px; margin-bottom:24px }}
+	.kpi-row {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:14px; margin-bottom:24px }}
 .kpi {{ background:var(--card); border:1px solid var(--border); border-radius:12px; padding:18px 14px; text-align:center; position:relative; overflow:hidden }}
 .kpi::before {{ content:''; position:absolute; top:0; left:0; right:0; height:3px }}
 .kpi.red::before   {{ background:#ef4444 }}
@@ -596,7 +935,7 @@ header {{
 .kpi.blue::before  {{ background:#3b82f6 }}
 .kpi.purple::before {{ background:#8b5cf6 }}
 .kpi.yellow::before {{ background:#f59e0b }}
-.kpi .val {{ font-size:28px; font-weight:700; font-family:'JetBrains Mono',monospace }}
+.kpi .val {{ font-size:28px; font-weight:700; font-family:'IBM Plex Mono',monospace }}
 .kpi.red .val    {{ color:#ef4444 }}
 .kpi.green .val  {{ color:#22c55e }}
 .kpi.blue .val   {{ color:#3b82f6 }}
@@ -605,13 +944,14 @@ header {{
 .kpi .lbl {{ font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-top:4px; font-weight:500 }}
 
 /* Cards */
-.row2 {{ display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-bottom:18px }}
-.row3 {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:18px; margin-bottom:18px }}
-.card {{ background:var(--card); border:1px solid var(--border); border-radius:12px; padding:20px; margin-bottom:18px }}
-.card h3 {{ font-size:11px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:1.5px; margin-bottom:14px }}
+	.row2 {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(420px,1fr)); gap:18px; margin-bottom:18px }}
+	.row3 {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:18px; margin-bottom:18px }}
+	.card {{ background:var(--card); border:1px solid var(--border); border-radius:12px; padding:20px; margin-bottom:18px }}
+.card-title {{ font-size:13px; font-weight:700; margin-bottom:14px; display:flex; align-items:center; gap:8px }}
+.card-title small {{ font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--dim); font-weight:400 }}
 .cmp-card {{ border:1px solid #243048; border-radius:10px; padding:12px; margin-bottom:12px; background:#141d30 }}
 .cmp-head {{ display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px }}
-.cmp-name {{ font-size:12px; font-family:'JetBrains Mono',monospace; color:#cbd5e1; word-break:break-all }}
+.cmp-name {{ font-size:12px; font-family:'IBM Plex Mono',monospace; color:#cbd5e1; word-break:break-all }}
 .cmp-status {{ padding:3px 8px; border-radius:999px; font-size:10px; font-weight:700; letter-spacing:.5px }}
 .status-pass {{ color:#22c55e; border:1px solid #22c55e55; background:#052e16 }}
 .status-fail {{ color:#ef4444; border:1px solid #ef444455; background:#450a0a }}
@@ -620,8 +960,9 @@ header {{
 .cmp-pane {{ border:1px solid #2a364f; border-radius:8px; background:#0f172a; padding:8px }}
 .cmp-title {{ font-size:10px; color:#94a3b8; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px }}
 .cmp-pane img {{ width:100%; border-radius:6px; border:1px solid #1e293b; display:block }}
-.cmp-empty {{ color:#64748b; font-size:12px; padding:16px 8px }}
-.cmp-detail {{ margin-top:8px; color:#94a3b8; font-size:11px; line-height:1.5 }}
+	.cmp-empty {{ color:#64748b; font-size:12px; padding:16px 8px }}
+	.cmp-detail {{ margin-top:8px; color:#94a3b8; font-size:11px; line-height:1.5 }}
+	.cmp-reason {{ margin-bottom:8px; color:#f59e0b; font-size:11px; line-height:1.4 }}
 
 /* Tables */
 .tbl-wrap {{ overflow-x:auto }}
@@ -630,41 +971,71 @@ th {{ background:#0d1526; color:var(--muted); font-size:10px; font-weight:600; t
 td {{ padding:8px 12px; border-bottom:1px solid #1a2030; color:#cbd5e1 }}
 tr:last-child td {{ border-bottom:none }}
 tr:hover td {{ background:#1f2d44 }}
-td.num {{ font-family:'JetBrains Mono',monospace; font-size:11px; color:#94a3b8 }}
+td.num {{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:#94a3b8 }}
 
 /* Badges */
-.badge {{ display:inline-block; padding:3px 8px; border-radius:6px; font-size:10px; font-weight:600; font-family:'JetBrains Mono',monospace; margin:1px }}
-.badge.pass {{ background:#052e16; color:#22c55e; border:1px solid #22c55e30 }}
-.badge.fail {{ background:#450a0a; color:#ef4444; border:1px solid #ef444430 }}
-.cat-tag {{ display:inline-block; padding:3px 9px; border-radius:6px; font-size:10px; font-weight:600; background:#162038; color:#60a5fa; border:1px solid #3b82f630 }}
-.dot {{ display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; vertical-align:middle }}
-.pct {{ font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--muted) }}
-.bar-bg {{ height:4px; background:var(--border); border-radius:2px; margin-top:4px }}
-.bar-fg {{ height:100%; border-radius:2px }}
+	.badge {{ display:inline-block; padding:3px 8px; border-radius:6px; font-size:10px; font-weight:600; font-family:'IBM Plex Mono',monospace; margin:1px }}
+	.badge.pass {{ background:#052e16; color:#22c55e; border:1px solid #22c55e30 }}
+	.badge.fail {{ background:#450a0a; color:#ef4444; border:1px solid #ef444430 }}
+	.badge-row {{ margin-bottom:8px }}
+	.cat-tag {{ display:inline-block; padding:3px 9px; border-radius:6px; font-size:10px; font-weight:600; background:#162038; color:#60a5fa; border:1px solid #3b82f630 }}
+	.dot {{ display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; vertical-align:middle }}
+	.pct {{ font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--muted) }}
+	.bar-bg {{ height:4px; background:var(--border); border-radius:2px; margin-top:4px }}
+	.bar-fg {{ height:100%; border-radius:2px }}
+	.banner {{
+	  border-radius:8px; padding:14px 18px; margin-bottom:18px;
+	  display:flex; align-items:flex-start; gap:12px;
+	  border-left-width:4px; border-left-style:solid; border:1px solid;
+	}}
+	.banner.amber {{ background:rgba(255,184,0,.08); border-color:rgba(255,184,0,.35); border-left-color:#ffb800 }}
+	.banner-icon {{ font-size:18px; flex-shrink:0; margin-top:1px }}
+	.banner-body h3 {{ font-size:13px; font-weight:700; margin-bottom:5px; color:#ffb800 }}
+	.banner-body p {{ font-size:12px; color:var(--muted); line-height:1.65 }}
+	.hm-wrap {{ margin-bottom:8px }}
+	.hm-grid {{ display:flex; flex-wrap:wrap; gap:4px }}
+	.pc {{
+	  width:28px; height:28px; border-radius:4px; display:flex; align-items:center; justify-content:center;
+	  font-family:'IBM Plex Mono',monospace; font-size:9px; font-weight:600; cursor:default; transition:transform .15s;
+	  flex-shrink:0;
+	}}
+	.pc:hover {{ transform:scale(1.22); z-index:10; position:relative }}
+	.pc.pass {{ background:rgba(0,214,143,.45); color:rgba(0,0,0,.75) }}
+	.pc.fail {{ background:rgba(255,59,48,.75); color:#fff }}
+	.pc.nd-pass {{ background:rgba(74,158,255,.35); color:#fff }}
+	.legend-row {{ display:flex; gap:16px; flex-wrap:wrap }}
+	.li {{ display:flex; align-items:center; gap:5px; font-size:11px; color:var(--muted) }}
+	.ld {{ width:10px; height:10px; border-radius:2px; flex-shrink:0 }}
+	.chart-canvas {{ width:100% !important; height:clamp(220px, 36vh, 420px) !important; display:block }}
 
 /* Chart.js defaults */
-@media(max-width:768px) {{
-  .row2,.row3 {{ grid-template-columns:1fr }}
-  .cmp-grid {{ grid-template-columns:1fr }}
-  .container,.header-inner {{ padding:16px }}
-  .kpi .val {{ font-size:22px }}
-}}
+	@media(max-width:1200px) {{
+	  .container,.header-inner {{ padding:16px }}
+	  .row2 {{ grid-template-columns:1fr }}
+	}}
+	@media(max-width:768px) {{
+	  .row2,.row3 {{ grid-template-columns:1fr }}
+	  .cmp-grid {{ grid-template-columns:1fr }}
+	  .chart-canvas {{ height:clamp(200px, 42vh, 320px) !important }}
+	  .kpi .val {{ font-size:22px }}
+	}}
 </style>
 </head>
 <body>
 <header>
   <div class="header-inner">
-    <div class="header-icon">🔬</div>
+    <div class="header-icon">gekoai</div>
     <div class="header-text">
       <h1>Component Detection Dashboard</h1>
-      <p>{ts_label} &nbsp;·&nbsp; {total_img} images &nbsp;·&nbsp; {'IoU threshold: ' + str(records[0]['iou_threshold']) if has_golden else 'Detection-only mode'}</p>
+      <p>{ts_label} &nbsp;|&nbsp; {total_img} images &nbsp;|&nbsp; {'IoU threshold: ' + str(records[0]['iou_threshold']) if has_golden else 'Detection-only mode'}</p>
     </div>
-    <div class="mode-badge">{'⚡ GOLDEN COMPARISON' if has_golden else '📦 DETECTION ONLY'}</div>
+    <div class="mode-badge">{'GOLDEN COMPARISON' if has_golden else 'DETECTION ONLY'}</div>
   </div>
 </header>
 <div class="container">
 
   <!-- KPIs -->
+  <div class="section-label">Overview</div>
   <div class="kpi-row">
     <div class="kpi blue"><div class="val">{total_img}</div><div class="lbl">Total Images</div></div>
     {'<div class="kpi green"><div class="val">' + str(pass_cnt) + '</div><div class="lbl">PASS</div></div>' if has_golden else ''}
@@ -676,22 +1047,31 @@ td.num {{ font-family:'JetBrains Mono',monospace; font-size:11px; color:#94a3b8 
     <div class="kpi blue"><div class="val">{avg_comp}</div><div class="lbl">Avg/Image</div></div>
   </div>
 
+  <div class="kpi-row">
+    {sup_cards}
+  </div>
+  {warning_banner_html}
+  {piece_heatmap_html}
+
   <!-- Charts row 1 -->
-  <div class="{'row3' if has_golden else 'row2'}">
-    <div class="card"><h3>Components by Class</h3><canvas id="classBar" height="220"></canvas></div>
-    <div class="card"><h3>Images by Category</h3><canvas id="catPie" height="220"></canvas></div>
+  <div class="section-label">Pass/Fail Overview</div>
+  <div class="row2">
+    <div class="card"><div class="card-title">Components by Class {'(PASS/FAIL)' if has_golden else ''}</div><canvas id="classBar" class="chart-canvas"></canvas></div>
+    <div class="card"><div class="card-title">Images by ID {'(PASS/FAIL)' if has_golden else ''}</div><canvas id="catPie" class="chart-canvas"></canvas></div>
     {pass_fail_chart if has_golden else ''}
   </div>
 
   <!-- Charts row 2 -->
+  <div class="section-label">Distribution</div>
   <div class="row2">
-    <div class="card"><h3>Components per Category</h3><canvas id="catComp" height="200"></canvas></div>
-    {iou_chart if has_golden else '<div class="card"><h3>Class Frequency (# images)</h3><canvas id="clsFreq" height="200"></canvas></div>'}
+    <div class="card"><div class="card-title">Components per ID</div><canvas id="catComp" class="chart-canvas"></canvas></div>
+    {iou_chart if has_golden else '<div class="card"><div class="card-title">Class Frequency <small># images</small></div><canvas id="clsFreq" class="chart-canvas"></canvas></div>'}
   </div>
 
   <!-- Class breakdown table -->
+  <div class="section-label">Class Details</div>
   <div class="card">
-    <h3>Component Class Breakdown</h3>
+    <div class="card-title">Component Class Breakdown</div>
     <div class="tbl-wrap">
       <table>
         <thead><tr><th>Class</th><th>Total</th><th>Images</th><th>Avg/Image</th><th>Share</th></tr></thead>
@@ -700,13 +1080,23 @@ td.num {{ font-family:'JetBrains Mono',monospace; font-size:11px; color:#94a3b8 
     </div>
   </div>
 
-  <!-- Category table -->
+  <!-- ID table -->
+  <div class="section-label">ID Details</div>
   <div class="card">
-    <h3>Category Summary</h3>
+    <div class="card-title">ID Summary</div>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th>Category</th><th>Images</th><th>Components</th><th>Avg/Image</th>{iou_th}<th>Results</th></tr></thead>
+        <thead><tr><th>ID</th><th>Images</th><th>Components</th><th>Avg/Image</th>{iou_th}<th>Results</th></tr></thead>
         <tbody>{cat_rows}</tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">Part-Level NG Rate</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Part</th><th>Total Qty</th><th>NG Qty</th><th>NG %</th></tr></thead>
+        <tbody>{part_rows_html if part_rows_html else '<tr><td colspan="4">No detected parts</td></tr>'}</tbody>
       </table>
     </div>
   </div>
@@ -717,35 +1107,58 @@ td.num {{ font-family:'JetBrains Mono',monospace; font-size:11px; color:#94a3b8 
 const P  = ["#3b82f6","#06b6d4","#8b5cf6","#ec4899","#f97316","#10b981","#f59e0b","#60a5fa","#ef4444","#6366f1","#22c55e","#84cc16"];
 const al = (cols, a) => cols.map(c => c + (a||'99'));
 const g  = {{x:{{ticks:{{color:"#64748b",font:{{size:10}}}},grid:{{color:"#1a2540"}}}},y:{{ticks:{{color:"#64748b",font:{{size:10}}}},grid:{{color:"#243048"}}}}}};
+const gPct = {{x:{{stacked:true,ticks:{{color:"#64748b",font:{{size:10}}}},grid:{{color:"#1a2540"}}}},y:{{stacked:true,min:0,max:100,ticks:{{color:"#64748b",font:{{size:10}},callback:(v)=>v+"%"}},grid:{{color:"#243048"}}}}}};
 const lg = {{labels:{{color:"#94a3b8",font:{{size:11}}}}}};
 
 const clsL = {cls_labels}, clsT = {cls_totals}, clsI = {cls_imgs};
 const catL = {cat_labels}, catC = {cat_counts}, catM = {cat_comps};
-const catP = {json.dumps(cat_pass)}, catF = {json.dumps(cat_fail)};
+const catP = {cat_pass}, catF = {cat_fail};
+const clsP = {json.dumps(class_pass)}, clsF = {json.dumps(class_fail)};
+const toPctPair = (passArr, failArr) => {{
+  const p = [], f = [];
+  for (let i = 0; i < Math.max(passArr.length, failArr.length); i++) {{
+    const pv = Number(passArr[i] || 0), fv = Number(failArr[i] || 0);
+    const t = pv + fv;
+    p.push(t > 0 ? +(pv * 100 / t).toFixed(2) : 0);
+    f.push(t > 0 ? +(fv * 100 / t).toFixed(2) : 0);
+  }}
+  return {{pass:p, fail:f}};
+}};
+const pfClass = toPctPair(clsP, clsF);
+const pfId = toPctPair(catP, catF);
+const ttPct = (rawP, rawF) => ({{
+  callbacks: {{
+    label: (ctx) => {{
+      const i = ctx.dataIndex;
+      const isPass = String(ctx.dataset.label || '').toUpperCase() === 'PASS';
+      const raw = isPass ? Number(rawP[i] || 0) : Number(rawF[i] || 0);
+      const pct = Number(ctx.parsed.y || 0);
+      return `${{ctx.dataset.label}}: ${{raw}} (${{pct.toFixed(2)}}%)`;
+    }}
+  }}
+}});
 
 new Chart(document.getElementById("classBar"),{{
   type:"bar",
-  data:{{labels:clsL,datasets:[{{label:"Total",data:clsT,backgroundColor:al(P),borderColor:P,borderWidth:1,borderRadius:4}}]}},
-  options:{{responsive:true,plugins:{{legend:{{display:false}}}},scales:g}}
+  data:{{labels:clsL,datasets:[{'{label:"PASS",data:pfClass.pass,backgroundColor:"#22c55e66",borderColor:"#22c55e",borderWidth:1,borderRadius:4,categoryPercentage:0.9,barPercentage:0.95},{label:"FAIL",data:pfClass.fail,backgroundColor:"#ef444466",borderColor:"#ef4444",borderWidth:1,borderRadius:4,categoryPercentage:0.9,barPercentage:0.95}' if has_golden else '{label:"Total",data:clsT,backgroundColor:al(P),borderColor:P,borderWidth:1,borderRadius:4}' }]}},
+  options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{'lg' if has_golden else '{display:false}'}, {'tooltip: ttPct(clsP, clsF),' if has_golden else ''} }},scales:{'gPct' if has_golden else 'g'}}}
 }});
 
 new Chart(document.getElementById("catPie"),{{
-  type:"doughnut",
-  data:{{labels:catL,datasets:[{{data:catC,backgroundColor:al(P.slice(0,catL.length),'cc'),borderColor:P,borderWidth:2}}]}},
-  options:{{responsive:true,plugins:{{legend:lg}}}}
+  type:{'"bar"' if has_golden else '"doughnut"'},
+  data:{{labels:catL,datasets:[{'{label:"PASS",data:pfId.pass,backgroundColor:"#22c55e66",borderColor:"#22c55e",borderWidth:1,borderRadius:3,categoryPercentage:0.9,barPercentage:0.95},{label:"FAIL",data:pfId.fail,backgroundColor:"#ef444466",borderColor:"#ef4444",borderWidth:1,borderRadius:3,categoryPercentage:0.9,barPercentage:0.95}' if has_golden else '{data:catC,backgroundColor:al(P.slice(0,catL.length),\'cc\'),borderColor:P,borderWidth:2}' }]}},
+  options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:lg {' ,tooltip: ttPct(catP, catF)' if has_golden else ''} }}{' ,scales:gPct' if has_golden else ''}}}
 }});
 
 new Chart(document.getElementById("catComp"),{{
   type:"bar",
   data:{{labels:catL,datasets:[{{label:"Components",data:catM,backgroundColor:al(P.slice(0,catL.length),'aa'),borderColor:P,borderWidth:1,borderRadius:4}}]}},
-  options:{{responsive:true,plugins:{{legend:{{display:false}}}},scales:g}}
+  options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{display:false}}}},scales:g}}
 }});
 
-{'new Chart(document.getElementById("passFail"),{type:"bar",data:{labels:catL,datasets:[{label:"PASS",data:catP,backgroundColor:"#22c55e55",borderColor:"#22c55e",borderWidth:1,borderRadius:3},{label:"FAIL",data:catF,backgroundColor:"#ef444455",borderColor:"#ef4444",borderWidth:1,borderRadius:3}]},options:{responsive:true,plugins:{legend:lg},scales:g}});' if has_golden else ''}
+{'new Chart(document.getElementById("iouHist"),{type:"bar",data:{labels:' + json.dumps(iou_hist_labels) + ',datasets:[{label:"Images",data:' + json.dumps(iou_hist_vals) + ',backgroundColor:"#3b82f666",borderColor:"#3b82f6",borderWidth:1,borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:g}});' if has_golden and iou_values else ''}
 
-{'new Chart(document.getElementById("iouHist"),{type:"bar",data:{labels:' + json.dumps(iou_hist_labels) + ',datasets:[{label:"Images",data:' + json.dumps(iou_hist_vals) + ',backgroundColor:"#3b82f666",borderColor:"#3b82f6",borderWidth:1,borderRadius:3}]},options:{responsive:true,plugins:{legend:{display:false}},scales:g}});' if has_golden and iou_values else ''}
-
-{'new Chart(document.getElementById("clsFreq"),{type:"bar",data:{labels:clsL,datasets:[{label:"Images",data:clsI,backgroundColor:"#8b5cf666",borderColor:"#8b5cf6",borderWidth:1,borderRadius:3}]},options:{responsive:true,indexAxis:"y",plugins:{legend:{display:false}},scales:g}});' if not has_golden else ''}
+{'new Chart(document.getElementById("clsFreq"),{type:"bar",data:{labels:clsL,datasets:[{label:"Images",data:clsI,backgroundColor:"#8b5cf666",borderColor:"#8b5cf6",borderWidth:1,borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:"y",plugins:{legend:{display:false}},scales:g}});' if not has_golden else ''}
 </script>
 </body>
 </html>"""
@@ -756,6 +1169,67 @@ new Chart(document.getElementById("catComp"),{{
 
 def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
               status_counts, iou_values, has_golden, out_path):
+    # Prefer generating PDF directly from the HTML dashboard so layout matches 1:1.
+    html_path = os.path.splitext(out_path)[0] + ".html"
+    if os.path.isfile(html_path):
+        try:
+            from weasyprint import HTML  # type: ignore
+
+            HTML(filename=html_path).write_pdf(out_path)
+            print(f"  ✅ PDF   → {out_path} (from HTML)")
+            return
+        except Exception:
+            pass
+        try:
+            import subprocess
+            from pathlib import Path
+
+            html_uri = Path(html_path).resolve().as_uri()
+            browser_cmds = [
+                [
+                    "msedge",
+                    "--headless=new",
+                    "--disable-gpu",
+                    "--virtual-time-budget=8000",
+                    f"--print-to-pdf={out_path}",
+                    html_uri,
+                ],
+                [
+                    "chrome",
+                    "--headless=new",
+                    "--disable-gpu",
+                    "--virtual-time-budget=8000",
+                    f"--print-to-pdf={out_path}",
+                    html_uri,
+                ],
+                [
+                    "chromium",
+                    "--headless=new",
+                    "--disable-gpu",
+                    "--virtual-time-budget=8000",
+                    f"--print-to-pdf={out_path}",
+                    html_uri,
+                ],
+            ]
+            for cmd in browser_cmds:
+                try:
+                    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+                        print(f"  ✅ PDF   → {out_path} (from HTML)")
+                        return
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        try:
+            import subprocess
+
+            subprocess.run(["wkhtmltopdf", html_path, out_path], check=True)
+            print(f"  ✅ PDF   → {out_path} (from HTML)")
+            return
+        except Exception:
+            pass
+
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
     from reportlab.lib.units import cm
@@ -890,56 +1364,98 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
 
     cls_names = [c for c, _ in sorted_classes]
     cls_vals  = [t for _, t in sorted_classes]
+    class_pass_vals = []
+    class_fail_vals = []
+    if has_golden:
+        class_pass_map = defaultdict(int)
+        class_fail_map = defaultdict(int)
+        for r in records:
+            status = str(r.get("status", "")).strip().upper()
+            for cls, cnt in (r.get("classes_dict") or {}).items():
+                if status == "PASS":
+                    class_pass_map[cls] += int(cnt)
+                elif status == "FAIL":
+                    class_fail_map[cls] += int(cnt)
+        class_pass_vals = [class_pass_map.get(c, 0) for c in cls_names]
+        class_fail_vals = [class_fail_map.get(c, 0) for c in cls_names]
     if cls_vals:
-        story.append(sec_bar("Total Detected Components by Class"))
+        story.append(sec_bar("Components by Class (PASS/FAIL)" if has_golden else "Total Detected Components by Class"))
         story.append(Spacer(1, 8))
         bc = VerticalBarChart()
         bc.x, bc.y = 55, 20
         bc.width   = PW - 70
         bc.height  = 130
-        bc.data    = [cls_vals]
+        if has_golden:
+            bc.data = [class_pass_vals, class_fail_vals]
+        else:
+            bc.data = [cls_vals]
         bc.categoryAxis.categoryNames = cls_names
         bc.categoryAxis.labels.angle  = 28
         bc.categoryAxis.labels.fontSize = 7
         bc.categoryAxis.labels.dy = -10
         bc.valueAxis.valueMin = 0
         bc.valueAxis.labels.fontSize = 7
-        bc.bars[0].fillColor = MDBL
+        if has_golden:
+            bc.bars[0].fillColor = PASS
+            bc.bars[1].fillColor = FAIL
+        else:
+            bc.bars[0].fillColor = MDBL
         d1 = Drawing(PW, 170)
         d1.add(bc)
         story.append(d1)
         story.append(Spacer(1, 12))
 
-    story.append(sec_bar("Image Distribution by Category"))
+    story.append(sec_bar("Images by ID (PASS/FAIL)" if has_golden else "Image Distribution by ID"))
     story.append(Spacer(1, 8))
-    pie_size   = 150
-    total_cats = sum(s["count"] for _, s in cat_data) or 1
-    pie_h      = pie_size + 30
-    pie_d      = Drawing(PW, pie_h)
-    pie        = Pie()
-    pie.x      = 15
-    pie.y      = 10
-    pie.width  = pie.height = pie_size
-    pie.data   = [s["count"] for _, s in cat_data]
-    pie.labels = [f"{lbl}\n{round(s['count']/total_cats*100,1)}%" for lbl, s in cat_data]
-    pie.sideLabels       = True
-    pie.sideLabelsOffset = 0.08
-    pie.simpleLabels     = False
-    for i in range(len(cat_data)):
-        pie.slices[i].fillColor   = PAL[i % len(PAL)]
-        pie.slices[i].strokeWidth = 1
-        pie.slices[i].strokeColor = WHITE
-        pie.slices[i].fontSize    = 7
-        pie.slices[i].fontName    = "Helvetica-Bold"
-    pie_d.add(pie)
-    story.append(pie_d)
+    if has_golden:
+        id_names = [lbl for lbl, _ in cat_data]
+        id_pass = [stats.get("pass", 0) for _, stats in cat_data]
+        id_fail = [stats.get("fail", 0) for _, stats in cat_data]
+        id_bar = VerticalBarChart()
+        id_bar.x, id_bar.y = 55, 20
+        id_bar.width = PW - 70
+        id_bar.height = 130
+        id_bar.data = [id_pass, id_fail]
+        id_bar.categoryAxis.categoryNames = id_names
+        id_bar.categoryAxis.labels.angle = 28
+        id_bar.categoryAxis.labels.fontSize = 7
+        id_bar.categoryAxis.labels.dy = -10
+        id_bar.valueAxis.valueMin = 0
+        id_bar.valueAxis.labels.fontSize = 7
+        id_bar.bars[0].fillColor = PASS
+        id_bar.bars[1].fillColor = FAIL
+        id_d = Drawing(PW, 170)
+        id_d.add(id_bar)
+        story.append(id_d)
+    else:
+        pie_size   = 150
+        total_cats = sum(s["count"] for _, s in cat_data) or 1
+        pie_h      = pie_size + 30
+        pie_d      = Drawing(PW, pie_h)
+        pie        = Pie()
+        pie.x      = 15
+        pie.y      = 10
+        pie.width  = pie.height = pie_size
+        pie.data   = [s["count"] for _, s in cat_data]
+        pie.labels = [f"{lbl}\n{round(s['count']/total_cats*100,1)}%" for lbl, s in cat_data]
+        pie.sideLabels       = True
+        pie.sideLabelsOffset = 0.08
+        pie.simpleLabels     = False
+        for i in range(len(cat_data)):
+            pie.slices[i].fillColor   = PAL[i % len(PAL)]
+            pie.slices[i].strokeWidth = 1
+            pie.slices[i].strokeColor = WHITE
+            pie.slices[i].fontSize    = 7
+            pie.slices[i].fontName    = "Helvetica-Bold"
+        pie_d.add(pie)
+        story.append(pie_d)
     story.append(Spacer(1, 12))
 
     if has_golden:
-        story.append(sec_bar("Pass / Fail Summary by Category",
+        story.append(sec_bar("Pass / Fail Summary by ID",
                               f"IoU threshold: {records[0]['iou_threshold']}"))
         story.append(Spacer(1, 6))
-        hdr = ["Category", "Images", "PASS", "FAIL", "Pass Rate", "Avg IoU"]
+        hdr = ["ID", "Images", "PASS", "FAIL", "Pass Rate", "Avg IoU"]
         rows = []
         for prefix, stats in cat_data:
             rate = f"{round(stats['pass']/stats['count']*100,1)}%" if stats['count'] else "—"
@@ -975,7 +1491,7 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
     story.append(Spacer(1, 6))
 
     if has_golden:
-        raw_hdr  = ["Image Name","Status","Matched","Avg IoU","Category","Mode"]
+        raw_hdr  = ["Image Name","Status","Matched","Avg IoU","ID","Mode"]
         raw_rows = []
         for r in records[:60]:
             matched_s = f"{r['matched']}/{r['total']}" if r['matched'] is not None else "—"
@@ -985,7 +1501,7 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
         cws3 = [PW*f for f in [0.30, 0.10, 0.13, 0.12, 0.20, 0.15]]
         story.append(mk_table(raw_hdr, raw_rows, cws3, status_col=1))
     else:
-        raw_hdr  = ["Image Name","Category","Detected Classes","Components"]
+        raw_hdr  = ["Image Name","ID","Detected Classes","Components"]
         raw_rows = []
         for r in records[:60]:
             dc = r["detected_classes"][:60] + ("…" if len(r["detected_classes"])>60 else "")

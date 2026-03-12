@@ -3,6 +3,8 @@ import subprocess
 import time
 from typing import Any
 
+from ai_labeller.dialogs import messagebox
+
 def stop_training(app) -> None:
     if not getattr(app, "training_running", False):
         return
@@ -153,7 +155,6 @@ def poll_training_queue(app) -> None:
             app._training_stop_requested = False
             output_path = getattr(app, "_last_training_output_path", "")
             try:
-                from tkinter import messagebox
                 messagebox.showinfo(app.LANG_MAP[app.lang]["title"], app.LANG_MAP[app.lang].get("train_done", "Training finished.\nOutput: {path}").format(path=output_path), parent=app.root)
             except Exception:
                 pass
@@ -166,7 +167,6 @@ def poll_training_queue(app) -> None:
             err = event[1]
             app.logger.error("Training process failed: %s", err)
             try:
-                from tkinter import messagebox
                 messagebox.showerror(app.LANG_MAP[app.lang]["title"], app.LANG_MAP[app.lang].get("train_failed", "Training failed: {err}").format(err=err), parent=app.root)
             except Exception:
                 pass
@@ -178,7 +178,6 @@ def poll_training_queue(app) -> None:
                 app.training_thread = None
             append_training_log(app, "[done] training stopped by user")
             try:
-                from tkinter import messagebox
                 messagebox.showinfo(app.LANG_MAP[app.lang]["title"], "Training stopped.", parent=app.root)
             except Exception:
                 pass

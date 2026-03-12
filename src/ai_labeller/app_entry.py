@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import tkinter as tk
+import sys
 
-from ai_labeller.main import GeckoAI
+from ai_labeller.app_qt import run_qt_mode
 
 
 class GeckoAIWindowLauncher:
     startup_mode = "chooser"
 
     def run(self) -> None:
-        root = tk.Tk()
-        GeckoAI(root, startup_mode=self.startup_mode)
-        root.mainloop()
+        run_qt_mode(self.startup_mode)
 
 
 class AllModeWindowLauncher(GeckoAIWindowLauncher):
@@ -38,4 +36,14 @@ def build_launcher(startup_mode: str) -> GeckoAIWindowLauncher:
 
 
 def run_window_mode(startup_mode: str) -> None:
-    build_launcher(startup_mode).run()
+    try:
+        build_launcher(startup_mode).run()
+    except Exception as exc:
+        msg = str(exc)
+        if "PySide6 is required for geckoai-qt" in msg or "No module named 'PySide6'" in msg:
+            sys.stderr.write(
+                "PySide6 is not installed in this Python environment.\n"
+                "Install with: python -m pip install -e \".[qt]\"\n"
+            )
+            raise SystemExit(1)
+        raise

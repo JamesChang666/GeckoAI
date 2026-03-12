@@ -2,12 +2,11 @@ import gc
 import os
 import shutil
 import warnings
-import tkinter as tk
-from tkinter import filedialog, messagebox
 from importlib import resources
 from typing import Any
 
 import numpy as np
+from ai_labeller.dialogs import filedialog, messagebox
 
 try:
     import cv2

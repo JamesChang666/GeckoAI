@@ -24,6 +24,9 @@ dependencies = [
 build = [
     "pyinstaller>=6.0",
 ]
+qt = [
+    "PySide6>=6.6",
+]
 
 [project.scripts]
 # CLI commands
@@ -31,6 +34,7 @@ geckoai = "ai_labeller.app_all:main"
 geckoai-all = "ai_labeller.app_all:main"
 geckoai-label = "ai_labeller.app_label:main"
 geckoai-detect = "ai_labeller.app_detect:main"
+geckoai-qt = "ai_labeller.app_qt:main"
 geckoai-report = "ai_labeller.detection_report_generator:main"
 
 [tool.setuptools]
