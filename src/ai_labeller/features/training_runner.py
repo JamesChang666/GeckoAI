@@ -2,9 +2,9 @@ import datetime
 import os
 import threading
 import time
-from tkinter import filedialog, messagebox
 
 from ai_labeller.constants import LANG_MAP
+from ai_labeller.dialogs import filedialog, messagebox
 
 
 def start_training_from_labels(app, has_yolo: bool) -> None:

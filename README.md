@@ -1,6 +1,28 @@
 # GeckoAI
 
-Desktop image annotation tool for object detection datasets (Tkinter + Ultralytics), with a separate web project.
+Desktop image annotation tool for object detection datasets (PySide6 + Ultralytics).
+
+## PySide6 Migration Status
+
+- Phase 1 complete: `geckoai-qt` launcher is available.
+- Phase 2 complete: Detect setup wizard (model/source/output/conf) is Qt-native.
+- Phase 3 complete: Detect setup supports golden/OCR parameters in Qt and passes them into the original detect workflow.
+- Current scope:
+  - Qt-native startup launcher window
+  - `Label / Detect / Legacy Home` mode selection
+  - Detect setup in Qt, detect workspace and runtime keep original behavior
+  - Label workflow still uses the stable Tkinter app
+- Install Qt launcher dependency:
+
+```bash
+pip install -e ".[qt]"
+```
+
+- Run Qt launcher:
+
+```bash
+geckoai-qt
+```
 
 ## Features
 
@@ -75,7 +97,6 @@ Desktop image annotation tool for object detection datasets (Tkinter + Ultralyti
 ## Repositories
 
 - Desktop app (this repo): `https://github.com/JamesChang666/GeckoAI`
-- Web app (separate repo): `https://github.com/JamesChang666/labeller_web`
 
 ## Dataset Structure
 
@@ -156,6 +177,7 @@ Single-mode entrypoints:
 geckoai-all
 geckoai-label
 geckoai-detect
+geckoai-qt
 geckoai-report <detect_results_xxx.csv>
 ```
 
@@ -181,20 +203,6 @@ Output:
 dist/GeckoAI-All/GeckoAI-All.exe
 dist/GeckoAI-Label/GeckoAI-Label.exe
 dist/GeckoAI-Detect/GeckoAI-Detect.exe
-```
-
-## Web Version
-
-This desktop repository includes local development files under `web_labeller/`, but the maintained web repository is:
-
-- `https://github.com/JamesChang666/labeller_web`
-
-Run locally:
-
-```bash
-cd web_labeller
-pip install -r requirements.txt
-uvicorn app:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 ## Shortcuts

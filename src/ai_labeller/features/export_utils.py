@@ -5,9 +5,8 @@ import datetime
 import math
 from typing import Any, List, Tuple
 
-from tkinter import messagebox
-
 from ai_labeller.core import atomic_write_text, atomic_write_json
+from ai_labeller.dialogs import messagebox
 from ai_labeller.features import image_utils
 
 

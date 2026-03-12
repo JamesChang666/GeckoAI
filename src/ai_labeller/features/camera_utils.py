@@ -11,6 +11,8 @@ except Exception:
 import numpy as np
 from PIL import Image, ImageTk
 
+from ai_labeller.dialogs import messagebox
+
 
 def scan_available_cameras(app: Any, max_probe: int = 6) -> list[int]:
     if not cv2:
@@ -94,13 +96,9 @@ def start_detect_video_stream(app: Any, source: Any) -> None:
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
         try:
-            messagebox = None
-            from tkinter import messagebox as _mb
-            messagebox = _mb
-        except Exception:
-            messagebox = None
-        if messagebox:
             messagebox.showerror("Detect Mode", "Failed to open video source.")
+        except Exception:
+            pass
         app._show_detect_settings_page_for_current_source()
         return
     app._detect_video_cap = cap
@@ -138,7 +136,6 @@ def _detect_tick_video(app: Any) -> None:
     except Exception as exc:
         app.logger.exception("Detect video frame failed")
         try:
-            from tkinter import messagebox
             messagebox.showerror("Detect Mode Error", str(exc), parent=app.root)
         except Exception:
             pass

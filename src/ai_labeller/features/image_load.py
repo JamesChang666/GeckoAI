@@ -3,8 +3,8 @@ from __future__ import annotations
 import copy
 import os
 from typing import Any
-from tkinter import messagebox
 
+from ai_labeller.dialogs import messagebox
 from ai_labeller.features import image_utils
 from ai_labeller.constants import LANG_MAP, COLORS
 

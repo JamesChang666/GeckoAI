@@ -8,12 +8,215 @@ from typing import Any
 import cv2
 import numpy as np
 from PIL import Image, ImageEnhance
-from tkinter import filedialog, messagebox
 
 from ai_labeller.core.geometry import calculate_iou
+from ai_labeller.dialogs import filedialog, messagebox
 
 
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
+
+
+def _select_adjustable_roi(
+    image: np.ndarray,
+    window_title: str,
+    initial_window_size: tuple[int, int] = (1100, 760),
+) -> tuple[int, int, int, int] | None:
+    h, w = image.shape[:2]
+    if h <= 1 or w <= 1:
+        return None
+    handle_radius = 8
+    min_size = 4
+    state: dict[str, Any] = {
+        "rect": None,  # [x1, y1, x2, y2]
+        "mode": "idle",  # idle | draw | move | resize
+        "handle": -1,
+        "start": (0, 0),
+        "base": None,
+    }
+
+    def _clamp(v: int, lo: int, hi: int) -> int:
+        return int(max(lo, min(hi, v)))
+
+    def _norm(rect: list[int] | tuple[int, int, int, int] | None) -> list[int] | None:
+        if rect is None:
+            return None
+        x1, y1, x2, y2 = map(int, rect)
+        x1, x2 = sorted([_clamp(x1, 0, w - 1), _clamp(x2, 0, w - 1)])
+        y1, y2 = sorted([_clamp(y1, 0, h - 1), _clamp(y2, 0, h - 1)])
+        return [x1, y1, x2, y2]
+
+    def _handles(rect: list[int]) -> list[tuple[int, int]]:
+        x1, y1, x2, y2 = rect
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+        return [
+            (x1, y1),  # TL
+            (cx, y1),  # TM
+            (x2, y1),  # TR
+            (x2, cy),  # RM
+            (x2, y2),  # BR
+            (cx, y2),  # BM
+            (x1, y2),  # BL
+            (x1, cy),  # LM
+        ]
+
+    def _hit_handle(x: int, y: int, rect: list[int]) -> int:
+        for i, (hx, hy) in enumerate(_handles(rect)):
+            if (x - hx) * (x - hx) + (y - hy) * (y - hy) <= (handle_radius + 3) * (handle_radius + 3):
+                return i
+        return -1
+
+    def _inside(x: int, y: int, rect: list[int]) -> bool:
+        x1, y1, x2, y2 = rect
+        return x1 <= x <= x2 and y1 <= y <= y2
+
+    def _resize_from_handle(base: list[int], handle_idx: int, x: int, y: int) -> list[int]:
+        x1, y1, x2, y2 = base
+        x = _clamp(x, 0, w - 1)
+        y = _clamp(y, 0, h - 1)
+        if handle_idx == 0:  # TL
+            x1 = min(x, x2 - min_size)
+            y1 = min(y, y2 - min_size)
+        elif handle_idx == 1:  # TM
+            y1 = min(y, y2 - min_size)
+        elif handle_idx == 2:  # TR
+            x2 = max(x, x1 + min_size)
+            y1 = min(y, y2 - min_size)
+        elif handle_idx == 3:  # RM
+            x2 = max(x, x1 + min_size)
+        elif handle_idx == 4:  # BR
+            x2 = max(x, x1 + min_size)
+            y2 = max(y, y1 + min_size)
+        elif handle_idx == 5:  # BM
+            y2 = max(y, y1 + min_size)
+        elif handle_idx == 6:  # BL
+            x1 = min(x, x2 - min_size)
+            y2 = max(y, y1 + min_size)
+        elif handle_idx == 7:  # LM
+            x1 = min(x, x2 - min_size)
+        return _norm([x1, y1, x2, y2]) or [x1, y1, x2, y2]
+
+    def _mouse(event: int, x: int, y: int, flags: int, param: Any) -> None:
+        del flags, param
+        x = _clamp(int(x), 0, w - 1)
+        y = _clamp(int(y), 0, h - 1)
+        rect = state.get("rect")
+        if event == cv2.EVENT_LBUTTONDOWN:
+            if rect is not None:
+                hit = _hit_handle(x, y, rect)
+                if hit >= 0:
+                    state["mode"] = "resize"
+                    state["handle"] = hit
+                    state["base"] = list(rect)
+                    return
+                if _inside(x, y, rect):
+                    state["mode"] = "move"
+                    state["start"] = (x, y)
+                    state["base"] = list(rect)
+                    return
+            state["mode"] = "draw"
+            state["rect"] = [x, y, x, y]
+            state["base"] = None
+            state["handle"] = -1
+            return
+        if event == cv2.EVENT_MOUSEMOVE:
+            mode = str(state.get("mode", "idle"))
+            if mode == "draw":
+                cur = state.get("rect")
+                if cur is not None:
+                    cur[2] = x
+                    cur[3] = y
+                    state["rect"] = _norm(cur)
+            elif mode == "resize":
+                base = state.get("base")
+                if isinstance(base, list):
+                    state["rect"] = _resize_from_handle(base, int(state.get("handle", -1)), x, y)
+            elif mode == "move":
+                base = state.get("base")
+                sx, sy = state.get("start", (x, y))
+                if isinstance(base, list):
+                    dx = int(x - sx)
+                    dy = int(y - sy)
+                    bw = int(base[2] - base[0])
+                    bh = int(base[3] - base[1])
+                    nx1 = _clamp(int(base[0] + dx), 0, max(0, w - 1 - bw))
+                    ny1 = _clamp(int(base[1] + dy), 0, max(0, h - 1 - bh))
+                    state["rect"] = [nx1, ny1, nx1 + bw, ny1 + bh]
+            return
+        if event == cv2.EVENT_LBUTTONUP:
+            state["mode"] = "idle"
+            state["handle"] = -1
+            state["base"] = None
+            state["rect"] = _norm(state.get("rect"))
+
+    cv2.namedWindow(window_title, cv2.WINDOW_NORMAL)
+    try:
+        win_w, win_h = initial_window_size
+        cv2.resizeWindow(window_title, int(win_w), int(win_h))
+    except Exception:
+        pass
+    cv2.setMouseCallback(window_title, _mouse)
+    try:
+        while True:
+            canvas = image.copy()
+            rect = _norm(state.get("rect"))
+            if rect is not None:
+                x1, y1, x2, y2 = rect
+                cv2.rectangle(canvas, (x1, y1), (x2, y2), (40, 230, 40), 2, cv2.LINE_AA)
+                for hx, hy in _handles(rect):
+                    cv2.circle(canvas, (int(hx), int(hy)), handle_radius, (255, 255, 255), -1, cv2.LINE_AA)
+                    cv2.circle(canvas, (int(hx), int(hy)), handle_radius - 2, (40, 230, 40), -1, cv2.LINE_AA)
+            cv2.putText(
+                canvas,
+                "Drag to draw | Drag 8 handles to adjust | R: redraw | Enter: confirm | Esc: cancel",
+                (10, 24),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                canvas,
+                "Drag to draw | Drag 8 handles to adjust | R: redraw | Enter: confirm | Esc: cancel",
+                (10, 24),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (30, 30, 30),
+                1,
+                cv2.LINE_AA,
+            )
+            cv2.imshow(window_title, canvas)
+            key = cv2.waitKey(20) & 0xFF
+            if key in (13, 10):
+                rect = _norm(state.get("rect"))
+                if rect is None:
+                    continue
+                x1, y1, x2, y2 = rect
+                if (x2 - x1) <= min_size or (y2 - y1) <= min_size:
+                    continue
+                return (int(x1), int(y1), int(x2 - x1), int(y2 - y1))
+            if key == 27:
+                return None
+            if key in (ord("r"), ord("R")):
+                state["rect"] = None
+                state["mode"] = "idle"
+                state["handle"] = -1
+                state["base"] = None
+    finally:
+        try:
+            cv2.destroyWindow(window_title)
+            cv2.waitKey(1)
+        except Exception:
+            pass
+
+
+def select_adjustable_template_roi(
+    image: np.ndarray,
+    window_title: str = "Select Golden Template",
+    initial_window_size: tuple[int, int] = (1100, 760),
+) -> tuple[int, int, int, int] | None:
+    return _select_adjustable_roi(image, window_title, initial_window_size=initial_window_size)
 
 
 def _order_points(pts: np.ndarray) -> np.ndarray:
@@ -246,6 +449,8 @@ class BackgroundCutBundle:
     v_tol: int
     match_threshold: float
     template_bgr: np.ndarray
+    id_mode: bool
+    id_roi_xywh: tuple[int, int, int, int] | None
 
 
 def run_cut_background_batch(
@@ -266,6 +471,34 @@ def run_cut_background_batch(
     )
     if not golden_image_path:
         return None
+    return run_cut_background_batch_with_golden(
+        root_dir=root_dir,
+        golden_image_path=golden_image_path,
+        threshold=threshold,
+        parent=parent,
+    )
+
+
+def run_cut_background_batch_with_golden(
+    root_dir: str,
+    golden_image_path: str,
+    threshold: float = 0.3,
+    parent: Any = None,
+) -> BatchResult | None:
+    root_dir = os.path.abspath(root_dir)
+    golden_image_path = os.path.abspath(golden_image_path)
+    if not os.path.isdir(root_dir):
+        messagebox.showerror("Cut Background", f"Folder not found:\n{root_dir}", parent=parent)
+        return None
+    if not os.path.isfile(golden_image_path):
+        messagebox.showerror("Cut Background", f"Golden image not found:\n{golden_image_path}", parent=parent)
+        return None
+    try:
+        if os.path.commonpath([root_dir, golden_image_path]) != root_dir:
+            messagebox.showwarning("Cut Background", "Golden image must be inside selected folder.", parent=parent)
+            return None
+    except Exception:
+        pass
 
     messagebox.showinfo(
         "Golden Setup - Step 1",
@@ -283,13 +516,32 @@ def run_cut_background_batch(
 
     messagebox.showinfo(
         "Golden Setup - Step 2",
-        "Draw a box around the Golden Template.\nPress ENTER when done.",
+        "Draw a box around the ID region.\n"
+        "After drawing, drag 8 handles to adjust.\n"
+        "R: redraw | ENTER: confirm | ESC: cancel.",
         parent=parent,
     )
-    roi = cv2.selectROI("Select Golden Template (Press ENTER)", golden_board, showCrosshair=True, fromCenter=False)
-    cv2.destroyWindow("Select Golden Template (Press ENTER)")
-    cv2.waitKey(1)
+    id_mode_enabled = True
+    id_roi_xywh: list[int] | None = None
+    id_roi = _select_adjustable_roi(golden_board, "Select Golden ID Region")
+    if id_roi is None:
+        return None
+    idx, idy, idw, idh = map(int, id_roi)
+    if idw <= 0 or idh <= 0:
+        return None
+    id_roi_xywh = [idx, idy, idw, idh]
 
+    messagebox.showinfo(
+        "Golden Setup - Step 3",
+        "Draw a box around the Golden Template.\n"
+        "After drawing, drag 8 handles to adjust.\n"
+        "R: redraw | ENTER: confirm | ESC: cancel.",
+        parent=parent,
+    )
+    roi = _select_adjustable_roi(golden_board, "Select Golden Template")
+
+    if roi is None:
+        return None
     x, y, w, h = map(int, roi)
     if w <= 0 or h <= 0:
         return None
@@ -310,6 +562,8 @@ def run_cut_background_batch(
         "s_tol": int(golden_params["s_tol"]),
         "v_tol": int(golden_params["v_tol"]),
         "match_threshold": float(threshold),
+        "id_mode": bool(id_mode_enabled),
+        "id_roi_xywh": id_roi_xywh,
     }
     with open(os.path.join(golden_dir, "golden_rules.json"), "w", encoding="utf-8") as f:
         json.dump(rules_json, f, ensure_ascii=False, indent=2)
@@ -350,6 +604,25 @@ def run_cut_background_batch(
             if board is None:
                 continue
             board_gray = _enhance_gray(board)
+            bh, bw = board_gray.shape[:2]
+            if bh < templ_h or bw < templ_w:
+                # Template larger than board; skip this image safely.
+                meta = {
+                    "source_image": os.path.abspath(src_path),
+                    "straight_board_path": os.path.abspath(straight_path),
+                    "matches": 0,
+                    "threshold": float(threshold),
+                    "skipped_reason": "board_smaller_than_template",
+                    "board_shape": [int(bh), int(bw)],
+                    "template_shape": [int(templ_h), int(templ_w)],
+                }
+                rel_path = os.path.relpath(src_path, root_dir)
+                rel_stem = os.path.splitext(rel_path)[0].replace("\\", "_").replace("/", "_")
+                image_dir = os.path.join(output_dir, f"{rel_stem}_detect_cut_board_golden")
+                os.makedirs(image_dir, exist_ok=True)
+                with open(os.path.join(image_dir, "meta.json"), "w", encoding="utf-8") as f:
+                    json.dump(meta, f, ensure_ascii=False, indent=2)
+                continue
             result = cv2.matchTemplate(board_gray, templ_gray, cv2.TM_CCOEFF_NORMED)
             matches = _find_rois_by_minmax(
                 result,
@@ -429,6 +702,16 @@ def load_background_cut_bundle(root_dir: str) -> BackgroundCutBundle | None:
     s_tol = int(data["s_tol"])
     v_tol = int(data["v_tol"])
     thr = float(data.get("match_threshold", 0.3))
+    id_mode = bool(data.get("id_mode", False))
+    id_roi_raw = data.get("id_roi_xywh")
+    id_roi_xywh: tuple[int, int, int, int] | None = None
+    if isinstance(id_roi_raw, (list, tuple)) and len(id_roi_raw) == 4:
+        try:
+            x, y, w, h = [int(v) for v in id_roi_raw]
+            if w > 0 and h > 0:
+                id_roi_xywh = (x, y, w, h)
+        except Exception:
+            id_roi_xywh = None
     template_bgr = cv2.imread(template_path)
     if template_bgr is None or template_bgr.size == 0:
         raise ValueError(f"Failed to load template image: {template_path}")
@@ -443,6 +726,8 @@ def load_background_cut_bundle(root_dir: str) -> BackgroundCutBundle | None:
         v_tol=v_tol,
         match_threshold=max(0.01, min(1.0, thr)),
         template_bgr=template_bgr,
+        id_mode=id_mode,
+        id_roi_xywh=id_roi_xywh,
     )
 
 
@@ -460,6 +745,9 @@ def extract_cut_pieces_from_bgr(image_bgr: np.ndarray, bundle: BackgroundCutBund
     templ_gray = _enhance_gray(bundle.template_bgr)
     board_gray = _enhance_gray(warped)
     templ_h, templ_w = templ_gray.shape[:2]
+    bh, bw = board_gray.shape[:2]
+    if bh < templ_h or bw < templ_w:
+        return []
     result = cv2.matchTemplate(board_gray, templ_gray, cv2.TM_CCOEFF_NORMED)
     matches = _find_rois_by_minmax(
         result,

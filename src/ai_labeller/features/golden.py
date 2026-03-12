@@ -1,16 +1,15 @@
-import glob
+﻿import glob
 import json
 import os
 import shutil
 import tempfile
+from pathlib import Path
 from typing import Any
 
-import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog, ttk
-from PIL import Image, ImageTk
-
 from ai_labeller.core import atomic_write_text
+from ai_labeller.dialogs import simpledialog
 from ai_labeller.features import image_utils
+from ai_labeller.features import ocr_utils
 
 
 def load_detect_background_cut_bundle(app, golden_dir: str) -> dict[str, Any] | None:
@@ -104,6 +103,50 @@ def find_dataset_yaml_in_folder(folder: str) -> str | None:
     for p in candidates:
         if os.path.isfile(p):
             return p
+    return None
+
+
+def resolve_golden_project_folder(folder: str) -> dict[str, Any] | None:
+    root_in = os.path.abspath(str(folder or "").strip())
+    if not root_in or not os.path.isdir(root_in):
+        return None
+    candidates: list[str] = [root_in]
+    base = os.path.basename(root_in).strip().lower()
+    if base == "background_cut_golden":
+        parent = os.path.dirname(root_in)
+        if parent and os.path.isdir(parent):
+            candidates.append(parent)
+    nested = os.path.join(root_in, "background_cut_golden")
+    if os.path.isdir(nested):
+        candidates.append(nested)
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for c in candidates:
+        a = os.path.abspath(c)
+        if a in seen:
+            continue
+        seen.add(a)
+        ordered.append(a)
+    for root in ordered:
+        yaml_path = find_dataset_yaml_in_folder(root)
+        if not yaml_path:
+            continue
+        txt_files = sorted(str(p) for p in Path(root).glob("*.txt") if p.is_file())
+        if not txt_files:
+            continue
+        label_path = ""
+        for p in txt_files:
+            if parse_yolo_label_file(p):
+                label_path = p
+                break
+        if not label_path:
+            label_path = txt_files[0]
+        return {
+            "project_root": root,
+            "mapping_path": os.path.abspath(yaml_path),
+            "label_path": os.path.abspath(label_path),
+            "txt_files": [os.path.abspath(p) for p in txt_files],
+        }
     return None
 
 
@@ -291,28 +334,35 @@ def bbox_iou(a: tuple[float, float, float, float], b: tuple[float, float, float,
 
 def evaluate_golden_match(app, result0: Any) -> tuple[str | None, str]:
     app._detect_spatial_mismatch_rects_norm = []
+    app._detect_last_fail_reason = ""
     if app.detect_run_mode_var.get().strip().lower() != "golden" or app._detect_golden_sample is None:
         app._detect_last_cut_piece_count = 0
         app._detect_last_ocr_id = ""
         app._detect_last_ocr_sub_id = ""
+        app._detect_last_fail_reason = ""
         return None, ""
+
     targets = app._detect_golden_sample.get("targets") or []
     if not targets:
         app._detect_last_ocr_id = ""
         app._detect_last_ocr_sub_id = ""
+        app._detect_last_fail_reason = "missing"
         return "FAIL", "golden targets missing"
+
     mode = normalize_golden_mode(app.detect_golden_mode_var.get())
     iou_thr = float(app.detect_golden_iou_var.get())
     h, w = getattr(result0, "orig_shape", (0, 0))
     if h <= 0 or w <= 0:
         app._detect_last_ocr_id = ""
         app._detect_last_ocr_sub_id = ""
+        app._detect_last_fail_reason = "missing"
         return "FAIL", "invalid frame shape"
 
     boxes = getattr(result0, "boxes", None)
     if boxes is None or getattr(boxes, "xyxy", None) is None or getattr(boxes, "cls", None) is None:
         app._detect_last_ocr_id = ""
         app._detect_last_ocr_sub_id = ""
+        app._detect_last_fail_reason = "missing"
         return "FAIL", "no detections"
 
     det_xyxy = boxes.xyxy.tolist()
@@ -329,10 +379,52 @@ def evaluate_golden_match(app, result0: Any) -> tuple[str | None, str]:
             return str(names_map[cid])
         return str(cid)
 
+    sample = getattr(app, "_detect_golden_sample", None) or {}
+    include_id_in_match = bool(sample.get("include_id_in_match", True))
+    id_class_id = sample.get("id_class_id")
+    sub_id_class_id = sample.get("sub_id_class_id")
+    id_class_name = str(sample.get("id_class_name", "") or "").strip().lower()
+    sub_id_class_name = str(sample.get("sub_id_class_name", "") or "").strip().lower()
+
+    def _is_id_or_sub_id_target(target: dict[str, Any]) -> bool:
+        t_cid = target.get("class_id")
+        t_name = str(target.get("class_name", "") or "").strip().lower()
+        if id_class_id is not None:
+            try:
+                if t_cid is not None and int(t_cid) == int(id_class_id):
+                    return True
+            except Exception:
+                pass
+        if sub_id_class_id is not None:
+            try:
+                if t_cid is not None and int(t_cid) == int(sub_id_class_id):
+                    return True
+            except Exception:
+                pass
+        if id_class_name and t_name == id_class_name:
+            return True
+        if sub_id_class_name and t_name == sub_id_class_name:
+            return True
+        return False
+
+    eval_targets = [t for t in targets if include_id_in_match or (not _is_id_or_sub_id_target(t))]
+
     matched_targets = 0
     best_ious: list[float] = []
     unmatched_target_rects: list[tuple[float, float, float, float]] = []
-    for target in targets:
+    fail_reasons: list[str] = []
+
+    def _target_class_token(target: dict[str, Any]) -> str:
+        t_cid = target.get("class_id")
+        if t_cid is not None:
+            try:
+                return str(int(t_cid))
+            except Exception:
+                return str(t_cid).strip() or "unknown"
+        t_name = str(target.get("class_name", "") or "").strip()
+        return t_name or "unknown"
+
+    for target in eval_targets:
         rect_norm = target.get("rect_norm")
         if rect_norm is None:
             continue
@@ -340,6 +432,8 @@ def evaluate_golden_match(app, result0: Any) -> tuple[str | None, str]:
         tgt_class_name = normalize_name(target.get("class_name")) if target.get("class_name") else ""
         target_matched = False
         target_best_iou = 0.0
+        class_seen_any = False
+        class_best_iou = 0.0
 
         for i, box in enumerate(det_xyxy):
             det_norm = (
@@ -353,11 +447,15 @@ def evaluate_golden_match(app, result0: Any) -> tuple[str | None, str]:
             cid = int(det_cls[i]) if i < len(det_cls) else -1
             dname = normalize_name(det_name_for_cid(cid))
 
+            # Follow strict class-id matching; class-name is only a fallback when id is missing.
             class_match = False
-            if tgt_class_name:
-                class_match = dname == tgt_class_name
-            elif tgt_class_id is not None:
+            if tgt_class_id is not None:
                 class_match = cid == int(tgt_class_id)
+            elif tgt_class_name:
+                class_match = dname == tgt_class_name
+            if class_match:
+                class_seen_any = True
+                class_best_iou = max(class_best_iou, iou)
 
             pos_match = iou >= iou_thr
             if mode == "class" and class_match:
@@ -373,24 +471,78 @@ def evaluate_golden_match(app, result0: Any) -> tuple[str | None, str]:
         best_ious.append(target_best_iou)
         if target_matched:
             matched_targets += 1
-        elif mode == "position":
+        else:
             unmatched_target_rects.append(
                 (float(rect_norm[0]), float(rect_norm[1]), float(rect_norm[2]), float(rect_norm[3]))
             )
+            class_token = _target_class_token(target)
+            if mode == "class":
+                fail_reasons.append(f"missing class {class_token}")
+            elif mode == "position":
+                fail_reasons.append(f"{'offset' if det_xyxy else 'missing'} class {class_token}")
+            else:
+                if not class_seen_any:
+                    fail_reasons.append(f"missing class {class_token}")
+                elif class_best_iou < iou_thr:
+                    fail_reasons.append(f"offset class {class_token}")
+                else:
+                    fail_reasons.append(f"missing class {class_token}")
 
-    total_targets = len(targets)
-    ocr_id = app._extract_ocr_id_from_result(result0)
-    ocr_sub_id = app._extract_ocr_sub_id_from_result(result0)
-    app._detect_last_ocr_id = ocr_id
-    app._detect_last_ocr_sub_id = ocr_sub_id
-    if mode == "position":
-        app._detect_spatial_mismatch_rects_norm = unmatched_target_rects
+    total_targets = len(eval_targets)
+    if total_targets == 0:
+        msg = "0/0 matched"
+        if app._should_use_background_cut_detection():
+            msg = f"{msg}, cut_pieces={int(getattr(app, '_detect_last_cut_piece_count', 0))}"
+        return "PASS", msg
+
+    bundle = getattr(app, "_detect_bg_cut_bundle", None)
+    bundle_id_enabled = bool(getattr(bundle, "id_mode", False) and getattr(bundle, "id_roi_xywh", None))
+    id_enabled = id_class_id is not None or bool(id_class_name) or bundle_id_enabled
+    sub_id_enabled = sub_id_class_id is not None or bool(sub_id_class_name)
+
+    ocr_id_raw, ocr_id_state = ocr_utils.extract_ocr_id_with_state_from_result(app, result0)
+    ocr_sub_raw, ocr_sub_state = ocr_utils.extract_ocr_sub_id_with_state_from_result(app, result0)
+
+    if id_enabled:
+        if ocr_id_state == "ok" and ocr_id_raw:
+            app._detect_last_ocr_id = ocr_id_raw
+        elif ocr_id_state == "missing_box":
+            app._detect_last_ocr_id = "no_id"
+        else:
+            app._detect_last_ocr_id = "unreadable_id"
+    else:
+        app._detect_last_ocr_id = ""
+
+    if sub_id_enabled:
+        if ocr_sub_state == "ok" and ocr_sub_raw:
+            app._detect_last_ocr_sub_id = ocr_sub_raw
+        elif ocr_sub_state == "missing_box":
+            app._detect_last_ocr_sub_id = "no_sub_id"
+        else:
+            app._detect_last_ocr_sub_id = "unreadable_sub_id"
+    else:
+        app._detect_last_ocr_sub_id = "none"
+
+    app._detect_spatial_mismatch_rects_norm = unmatched_target_rects
+    if fail_reasons:
+        ordered_unique: list[str] = []
+        seen: set[str] = set()
+        for reason in fail_reasons:
+            text = str(reason or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            ordered_unique.append(text)
+        app._detect_last_fail_reason = "; ".join(ordered_unique)
+    else:
+        app._detect_last_fail_reason = ""
+
     avg_iou = sum(best_ious) / max(1, len(best_ious))
     msg = f"{matched_targets}/{total_targets} matched, avg IoU={avg_iou:.3f}"
     if app._should_use_background_cut_detection():
         msg = f"{msg}, cut_pieces={int(getattr(app, '_detect_last_cut_piece_count', 0))}"
-    if ocr_id:
-        msg = f"{msg}, id={ocr_id}"
-    if ocr_sub_id:
-        msg = f"{msg}, sub_id={ocr_sub_id}"
+    if app._detect_last_ocr_id:
+        msg = f"{msg}, id={app._detect_last_ocr_id}"
+    if app._detect_last_ocr_sub_id:
+        msg = f"{msg}, sub_id={app._detect_last_ocr_sub_id}"
     return ("PASS", msg) if matched_targets == total_targets else ("FAIL", msg)

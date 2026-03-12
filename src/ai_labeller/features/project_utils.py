@@ -1,10 +1,9 @@
 import glob
 import os
-import tkinter as tk
-from tkinter import filedialog, messagebox
 from typing import Any
 
 from ai_labeller.constants import LANG_MAP, COLORS
+from ai_labeller.dialogs import filedialog, messagebox
 
 
 def normalize_project_root(directory: str) -> str:
@@ -285,7 +284,7 @@ def load_project_from_path(app, directory, preferred_image=None, save_session=Tr
         try:
             if app.combo_split.winfo_exists():
                 app.combo_split.set(app.current_split)
-        except tk.TclError:
+        except Exception:
             pass
     app.load_split_data(preferred_image=preferred_image)
     if save_session:
@@ -315,7 +314,7 @@ def load_split_data(app, preferred_image=None):
                 try:
                     if app.combo_split.winfo_exists():
                         app.combo_split.set(app.current_split)
-                except tk.TclError:
+                except Exception:
                     pass
             img_path = f"{app.project_root}/images/{app.current_split}"
 
@@ -335,7 +334,7 @@ def load_split_data(app, preferred_image=None):
                     try:
                         if app.combo_split.winfo_exists():
                             app.combo_split.set(app.current_split)
-                    except tk.TclError:
+                    except Exception:
                         pass
                 img_path = f"{app.project_root}/images/{app.current_split}"
 

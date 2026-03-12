@@ -57,24 +57,22 @@ def init_detect_report_logger(app: Any, source_kind: str, source_value: Any, out
             app._detect_report_mode = "pure_detect"
         with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            if app._detect_report_mode == "golden":
-                writer.writerow([
-                    "timestamp",
-                    "image_name",
-                    "detected_classes",
-                    "golden_mode",
-                    "iou_threshold",
-                    "status",
-                    "details",
-                    "golden_image_path",
-                    "golden_label_path",
-                ])
-            else:
-                writer.writerow([
-                    "timestamp",
-                    "image_name",
-                    "detected_classes",
-                ])
+            writer.writerow([
+                "timestamp",
+                "id",
+                "sub_id",
+                "image_name",
+                "status",
+                "detected_classes",
+                "reason",
+                "golden_mode",
+                "iou_threshold",
+                "path",
+                "detect_image_path",
+                "details",
+                "golden_image_path",
+                "golden_label_path",
+            ])
         app._detect_report_csv_path = csv_path
     except Exception:
         app.logger.exception("Failed to initialize detect report logger")
@@ -245,14 +243,14 @@ def append_detect_report_row(app: Any, image_name: str, result0: Any, status: st
         details_text = str(details or "")
         if getattr(app, "_detect_last_ocr_id", None):
             if details_text:
-                details_text = f"{details_text}; ocr_id={app._detect_last_ocr_id}"
+                details_text = f"{details_text}; id={app._detect_last_ocr_id}"
             else:
-                details_text = f"ocr_id={app._detect_last_ocr_id}"
+                details_text = f"id={app._detect_last_ocr_id}"
         if getattr(app, "_detect_last_ocr_sub_id", None):
             if details_text:
-                details_text = f"{details_text}; ocr_sub_id={app._detect_last_ocr_sub_id}"
+                details_text = f"{details_text}; sub_id={app._detect_last_ocr_sub_id}"
             else:
-                details_text = f"ocr_sub_id={app._detect_last_ocr_sub_id}"
+                details_text = f"sub_id={app._detect_last_ocr_sub_id}"
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if getattr(app, "_detect_report_csv_path", None):
             with open(app._detect_report_csv_path, "a", newline="", encoding="utf-8-sig") as f:
@@ -265,9 +263,42 @@ def append_detect_report_row(app: Any, image_name: str, result0: Any, status: st
                         mode = str(mode_raw or "").strip().lower()
                     golden_image_path = _resolve_golden_image_path_for_report(app)
                     golden_label_path = _resolve_golden_label_path_for_report(app)
-                    writer.writerow([ts, image_name, class_text, mode, iou_text, status or "", details_text, golden_image_path, golden_label_path])
+                    reason_text = str(getattr(app, "_detect_last_fail_reason", "") or "").strip()
+                    id_text = str(getattr(app, "_detect_last_ocr_id", "") or "").strip()
+                    sub_id_text = str(getattr(app, "_detect_last_ocr_sub_id", "") or "").strip()
+                    writer.writerow([
+                        ts,
+                        id_text,
+                        sub_id_text,
+                        image_name,
+                        status or "",
+                        class_text,
+                        reason_text,
+                        mode,
+                        iou_text,
+                        "",
+                        "",
+                        details_text,
+                        golden_image_path,
+                        golden_label_path,
+                    ])
                 else:
-                    writer.writerow([ts, image_name, class_text])
+                    writer.writerow([
+                        ts,
+                        "",
+                        "",
+                        image_name,
+                        "",
+                        class_text,
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        details_text,
+                        "",
+                        "",
+                    ])
     except Exception:
         app.logger.exception("Failed to append detect report row")
 

@@ -1,10 +1,9 @@
 import os
 import shutil
 from typing import Any
-import tkinter as tk
-from tkinter import messagebox
 
 from ai_labeller.core import atomic_write_text, atomic_write_json
+from ai_labeller.dialogs import messagebox
 
 
 def save_current(app: Any) -> None:

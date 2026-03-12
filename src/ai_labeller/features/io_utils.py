@@ -1,11 +1,11 @@
 import datetime
 import json
 import os
-from tkinter import messagebox
 from typing import Any
 
 from ai_labeller.constants import LANG_MAP
 from ai_labeller.core import SessionState, atomic_write_json, atomic_write_text
+from ai_labeller.dialogs import messagebox
 
 
 def project_progress_yaml_path(project_root: str | None = None) -> str | None:
