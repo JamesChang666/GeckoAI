@@ -31,6 +31,7 @@ qt = [
 [project.scripts]
 # CLI commands
 geckoai = "ai_labeller.app_all:main"
+geckoai-cli = "ai_labeller.cli:main"
 geckoai-all = "ai_labeller.app_all:main"
 geckoai-label = "ai_labeller.app_label:main"
 geckoai-detect = "ai_labeller.app_detect:main"

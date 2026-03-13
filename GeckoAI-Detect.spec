@@ -5,7 +5,7 @@ a = Analysis(
     ['src\\ai_labeller\\app_detect.py'],
     pathex=['src'],
     binaries=[],
-    datas=[('src\\ai_labeller\\assets', 'ai_labeller\\assets'), ('src\\ai_labeller\\models', 'ai_labeller\\models')],
+    datas=[('src\\ai_labeller\\assets', 'ai_labeller\\assets'), ('src\\ai_labeller\\models', 'ai_labeller\\models'), ('src\\ai_labeller\\train_runner.py', 'ai_labeller'), ('src\\ai_labeller\\build_training_runtime.py', 'ai_labeller'), ('src\\ai_labeller\\auto_build_training_runtime.py', 'ai_labeller')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -19,8 +19,10 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
+    exclude_binaries=False,
     name='GeckoAI-Detect',
     debug=False,
     bootloader_ignore_signals=False,
@@ -33,13 +35,4 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['C:\\Users\\james\\Desktop\\app_icon.png'],
-)
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='GeckoAI-Detect',
 )

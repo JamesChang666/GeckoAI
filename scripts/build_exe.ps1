@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("all", "label", "detect")]
+    [ValidateSet("all", "label", "detect", "cli")]
     [string]$Target = "all"
 )
 
@@ -20,6 +20,12 @@ switch ($Target) {
     "detect" {
         $entry = "src\ai_labeller\app_detect.py"
         $name = "GeckoAI-Detect"
+        $console = $false
+    }
+    "cli" {
+        $entry = "src\ai_labeller\cli.py"
+        $name = "GeckoAI-CLI"
+        $console = $true
     }
 }
 
@@ -34,11 +40,15 @@ $cmd = @(
     "pyinstaller",
     "--noconfirm",
     "--clean",
-    "--noconsole",
+    "--onefile",
     "--name", $name,
     "--paths", "src",
     "--icon", $iconPath
 )
+
+if (-not $console) {
+    $cmd += "--noconsole"
+}
 
 foreach ($d in $addData) {
     $cmd += @("--add-data", $d)

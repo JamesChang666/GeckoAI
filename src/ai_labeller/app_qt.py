@@ -4,12 +4,15 @@ import argparse
 import copy
 import csv
 import datetime
+import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
 import threading
+import time
 import traceback
 from pathlib import Path
 from typing import Any
@@ -352,6 +355,10 @@ def _build_main_window(startup_mode: str):
             self.batch.setRange(-1, 512)
             self.batch.setValue(-1)
             self.batch.setSpecialValueText("Auto (-1)")
+            self.device_mode = QComboBox(self)
+            self.device_mode.addItem("Auto (Prefer GPU)", "auto")
+            self.device_mode.addItem("GPU (Prefer)", "gpu")
+            self.device_mode.addItem("CPU Only", "cpu")
 
             form = QFormLayout()
             form.addRow("Output Folder", self.output_dir)
@@ -360,6 +367,7 @@ def _build_main_window(startup_mode: str):
             form.addRow("Epochs", self.epochs)
             form.addRow("Image Size", self.imgsz)
             form.addRow("Batch Size", self.batch)
+            form.addRow("Training Device", self.device_mode)
             layout.addLayout(form)
 
             ok_btn = QPushButton("Next", self)
@@ -397,7 +405,7 @@ def _build_main_window(startup_mode: str):
                 self.setStyleSheet(
                     "QDialog{background:#FFFFFF;color:#111111;}"
                     "QLabel{color:#111111;}"
-                    "QLineEdit,QSpinBox{background:#FFFFFF;color:#111111;border:1px solid #D1D1D6;border-radius:6px;padding:4px;}"
+                    "QLineEdit,QSpinBox,QComboBox{background:#FFFFFF;color:#111111;border:1px solid #D1D1D6;border-radius:6px;padding:4px;}"
                     "QPushButton{background:#F2F2F5;color:#111111;border:1px solid #C8C8CD;border-radius:6px;padding:6px 10px;}"
                     "QPushButton:hover{background:#E8E8ED;}"
                 )
@@ -406,7 +414,7 @@ def _build_main_window(startup_mode: str):
                 self.setStyleSheet(
                     "QDialog{background:#1F1F1F;color:#F2F2F2;}"
                     "QLabel{color:#F2F2F2;}"
-                    "QLineEdit,QSpinBox{background:#2A2A2A;color:#F2F2F2;border:1px solid #595959;border-radius:6px;padding:4px;}"
+                    "QLineEdit,QSpinBox,QComboBox{background:#2A2A2A;color:#F2F2F2;border:1px solid #595959;border-radius:6px;padding:4px;}"
                     "QPushButton{background:#2F2F2F;color:#F2F2F2;border:1px solid #595959;border-radius:6px;padding:6px 10px;}"
                     "QPushButton:hover{background:#3A3A3A;}"
                 )
@@ -441,6 +449,7 @@ def _build_main_window(startup_mode: str):
                 "epochs": int(self.epochs.value()),
                 "imgsz": int(self.imgsz.value()),
                 "batch": int(self.batch.value()),
+                "device_mode": str(self.device_mode.currentData() or "auto"),
             }
 
     class TrainingMonitorDialog(QDialog):
@@ -459,6 +468,13 @@ def _build_main_window(startup_mode: str):
             layout.addLayout(top_row)
             self.lbl_command = QLabel(self)
             self.lbl_command.setWordWrap(True)
+            self.lbl_progress = QLabel("Progress: -", self)
+            self.lbl_elapsed = QLabel("Elapsed: -", self)
+            self.lbl_eta = QLabel("ETA: -", self)
+            stats_row = QHBoxLayout()
+            stats_row.addWidget(self.lbl_progress, 1)
+            stats_row.addWidget(self.lbl_elapsed, 1)
+            stats_row.addWidget(self.lbl_eta, 1)
             self.txt_log = QTextEdit(self)
             self.txt_log.setReadOnly(True)
             btn_stop = QPushButton("Stop", self)
@@ -472,12 +488,18 @@ def _build_main_window(startup_mode: str):
             btn_row.addWidget(btn_save)
             btn_row.addWidget(btn_clear)
             layout.addWidget(self.lbl_command)
+            layout.addLayout(stats_row)
             layout.addWidget(self.txt_log, 1)
             layout.addLayout(btn_row)
             self._apply_theme_styles()
 
         def set_command(self, command_text: str) -> None:
             self.lbl_command.setText(command_text or "")
+
+        def set_progress_summary(self, progress_text: str, elapsed_text: str, eta_text: str) -> None:
+            self.lbl_progress.setText(progress_text or "Progress: -")
+            self.lbl_elapsed.setText(elapsed_text or "Elapsed: -")
+            self.lbl_eta.setText(eta_text or "ETA: -")
 
         def _request_stop(self) -> None:
             try:
@@ -679,7 +701,6 @@ def _build_main_window(startup_mode: str):
 
             self.enable_golden = QCheckBox("Enable Golden Match", self)
             self.enable_golden.toggled.connect(self._refresh_golden_state)
-            self.enable_golden.setChecked(True)
             self.golden_dir = PathPickerField(
                 "Select Golden Folder",
                 "Select golden folder",
@@ -708,6 +729,7 @@ def _build_main_window(startup_mode: str):
             page_golden_layout.addWidget(self.include_id_regions_in_match)
             page_golden_layout.addStretch(1)
             self._steps.addWidget(page_golden)
+            self.enable_golden.setChecked(True)
 
             conf_box = QGroupBox("Confidence", self)
             conf_layout = QHBoxLayout(conf_box)
@@ -2266,6 +2288,7 @@ def _build_main_window(startup_mode: str):
             self.on_selection_changed = None
             self.ghost_rects: list[list[float]] = []
             self.resolve_class_name = None
+            self.resolve_class_color = None
             self.on_paste_prev_box = None
 
         def set_image(self, pixmap: QPixmap, img_w: int, img_h: int, rects: list[list[float]]) -> None:
@@ -2527,17 +2550,29 @@ def _build_main_window(startup_mode: str):
                             cx, cy = self._img_to_canvas(px, py)
                             poly.append(QPointF(float(cx), float(cy)))
                         painter.drawPolygon(poly)
-                pen = QPen(QColor("#00E676"))
-                pen.setWidth(2)
-                painter.setPen(pen)
                 for idx, rect in enumerate(self.rects):
+                    class_id = int(rect[4]) if len(rect) >= 5 else 0
+                    box_color = QColor("#00E676")
+                    if callable(self.resolve_class_color):
+                        try:
+                            color_val = self.resolve_class_color(class_id)
+                            if isinstance(color_val, QColor):
+                                box_color = QColor(color_val)
+                            elif isinstance(color_val, (tuple, list)) and len(color_val) >= 3:
+                                box_color = QColor(int(color_val[0]), int(color_val[1]), int(color_val[2]))
+                            elif color_val:
+                                box_color = QColor(str(color_val))
+                        except Exception:
+                            box_color = QColor("#00E676")
+                    pen = QPen(box_color)
+                    pen.setWidth(2)
+                    painter.setPen(pen)
                     corners = self._rect_corners(rect)
                     poly = QPolygonF()
                     for px, py in corners:
                         cx, cy = self._img_to_canvas(px, py)
                         poly.append(QPointF(float(cx), float(cy)))
                     painter.drawPolygon(poly)
-                    class_id = int(rect[4]) if len(rect) >= 5 else 0
                     class_name = str(class_id)
                     if callable(self.resolve_class_name):
                         try:
@@ -3011,6 +3046,7 @@ def _build_main_window(startup_mode: str):
         training_done_signal = Signal(str)
         training_failed_signal = Signal(str)
         training_finalize_signal = Signal()
+        training_progress_signal = Signal(str, str, str)
 
         def __init__(self, on_back, allow_detect_bridge: bool = True):
             super().__init__()
@@ -3036,6 +3072,8 @@ def _build_main_window(startup_mode: str):
             self._propagate_mode = "if_missing"
             self._prev_image_rects: list[list[float]] = []
             self._prev_image_selected_rects: list[list[float]] = []
+            self._label_format_mode = "detect"
+            self._label_class_color_overrides: dict[int, tuple[int, int, int]] = {}
             self._autosave_enabled = True
             self._autosave_dirty = False
             self._autosave_timer = QTimer(self)
@@ -3051,6 +3089,9 @@ def _build_main_window(startup_mode: str):
             self._training_process: subprocess.Popen[str] | None = None
             self._training_stop_requested = False
             self._train_monitor_dialog: TrainingMonitorDialog | None = None
+            self._training_started_at = 0.0
+            self._training_total_epochs = 0
+            self._training_current_epoch = 0
             self.setWindowTitle("GeckoAI Label Workspace")
             self.resize(1320, 780)
             self.setMinimumSize(980, 680)
@@ -3061,6 +3102,7 @@ def _build_main_window(startup_mode: str):
             self.training_done_signal.connect(self._on_training_done)
             self.training_failed_signal.connect(self._on_training_failed)
             self.training_finalize_signal.connect(self._on_training_finalize)
+            self.training_progress_signal.connect(self._on_training_progress)
             self._apply_adaptive_window_size()
 
         def _apply_adaptive_window_size(self) -> None:
@@ -3301,6 +3343,10 @@ def _build_main_window(startup_mode: str):
                 f"QPushButton{{background:{c['primary']};color:{c['text_white']};border:none;border-radius:6px;padding:6px 10px;}}"
                 f"QPushButton:hover{{background:{c['primary_hover']};}}"
             )
+            self.btn_label_class_color.setStyleSheet(
+                f"QPushButton{{background:{c['bg_white']};color:{c['text_primary']};border:1px solid {c['border']};border-radius:6px;padding:6px 10px;}}"
+                "QPushButton:hover{background:#F3F3F6;}"
+            )
             self.btn_apply_class.setStyleSheet(
                 f"QPushButton{{background:{c['success']};color:{c['text_white']};border:none;border-radius:6px;padding:6px 10px;}}"
                 "QPushButton:hover{background:#0C8A48;}"
@@ -3466,6 +3512,7 @@ def _build_main_window(startup_mode: str):
             self.canvas.on_rects_changed = self._on_canvas_rects_changed
             self.canvas.on_selection_changed = self._on_canvas_selection_changed
             self.canvas.resolve_class_name = self._class_name_by_id
+            self.canvas.resolve_class_color = self._label_class_color_rgb
             self.canvas.on_paste_prev_box = self._paste_prev_label_at
 
             right = QWidget(root)
@@ -3561,6 +3608,9 @@ def _build_main_window(startup_mode: str):
             self.btn_add_class = QPushButton("Add", class_box)
             self.btn_add_class.setFixedWidth(56)
             self.btn_add_class.clicked.connect(self._add_class)
+            self.btn_label_class_color = QPushButton("Color", class_box)
+            self.btn_label_class_color.setFixedWidth(64)
+            self.btn_label_class_color.clicked.connect(self._configure_label_class_color)
             self.btn_apply_class = QPushButton("Apply", class_box)
             self.btn_apply_class.setFixedWidth(64)
             self.btn_apply_class.clicked.connect(self._set_selected_box_class)
@@ -3570,6 +3620,7 @@ def _build_main_window(startup_mode: str):
             self.btn_clear_labels.clicked.connect(self._clear_current_labels)
             row_class_picker.addWidget(self.class_combo, 1)
             row_class_picker.addWidget(self.btn_add_class, 0)
+            row_class_picker.addWidget(self.btn_label_class_color, 0)
             row_class_picker.addWidget(self.btn_apply_class, 0)
             class_layout.addLayout(row_class_picker)
             row_class_actions = QHBoxLayout()
@@ -3645,6 +3696,7 @@ def _build_main_window(startup_mode: str):
 
         def _load_label_project(self, path: str, kind: str) -> None:
             self._project_dir = os.path.abspath(path)
+            self._label_format_mode = "detect"
             self._progress_state = self._read_progress_yaml(self._project_dir)
             images_root = os.path.join(path, "images")
             labels_root = os.path.join(path, "labels")
@@ -4335,6 +4387,7 @@ def _build_main_window(startup_mode: str):
                 except Exception:
                     class_id = 0
                 if len(parts) >= 9:
+                    self._label_format_mode = "obb"
                     try:
                         pts = list(map(float, parts[1:9]))
                     except Exception:
@@ -4362,6 +4415,98 @@ def _build_main_window(startup_mode: str):
                     angle = 0.0
                 rects.append([x1, y1, x2, y2, class_id, angle])
             return rects
+
+        def _rect_requires_obb(self, rect: list[float]) -> bool:
+            try:
+                angle = float(rect[5]) if len(rect) >= 6 else 0.0
+            except Exception:
+                angle = 0.0
+            return abs(angle) > 0.01
+
+        def _ensure_label_format_mode(self) -> None:
+            if str(getattr(self, "_label_format_mode", "detect")).strip().lower() == "obb":
+                return
+            for rects in self._labels_by_path.values():
+                for rect in rects:
+                    if self._rect_requires_obb(rect):
+                        self._label_format_mode = "obb"
+                        self._convert_dataset_labels_to_obb()
+                        return
+            if hasattr(self, "canvas") and self.canvas is not None:
+                for rect in list(getattr(self.canvas, "rects", []) or []):
+                    if self._rect_requires_obb(rect):
+                        self._label_format_mode = "obb"
+                        self._convert_dataset_labels_to_obb()
+                        return
+
+        def _image_size_for_label_path(self, image_path: str) -> tuple[int, int]:
+            current = self._image_paths[self._image_idx] if self._image_paths and 0 <= self._image_idx < len(self._image_paths) else ""
+            if current and os.path.abspath(current) == os.path.abspath(image_path) and self._last_bgr is not None:
+                h, w = self._last_bgr.shape[:2]
+                return int(w), int(h)
+            img = QImage(image_path)
+            if img.isNull():
+                return 0, 0
+            return int(img.width()), int(img.height())
+
+        def _serialize_rects_for_mode(self, rects: list[list[float]], img_w: int, img_h: int, mode: str) -> list[str]:
+            if img_w <= 0 or img_h <= 0:
+                return []
+            save_as_obb = str(mode or "detect").strip().lower() == "obb"
+            lines: list[str] = []
+            for rect in rects:
+                x1, y1, x2, y2 = rect[:4]
+                class_id = int(rect[4]) if len(rect) >= 5 else 0
+                angle = float(rect[5]) if len(rect) >= 6 else 0.0
+                x1, y1 = max(0.0, min(img_w, x1)), max(0.0, min(img_h, y1))
+                x2, y2 = max(0.0, min(img_w, x2)), max(0.0, min(img_h, y2))
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                if save_as_obb:
+                    rect_norm = [x1, y1, x2, y2, class_id, angle]
+                    corners = self.canvas._rect_corners(rect_norm)
+                    xy: list[str] = []
+                    for px, py in corners:
+                        nx = max(0.0, min(1.0, px / float(img_w)))
+                        ny = max(0.0, min(1.0, py / float(img_h)))
+                        xy.append(f"{nx:.6f}")
+                        xy.append(f"{ny:.6f}")
+                    lines.append(f"{int(class_id)} " + " ".join(xy))
+                else:
+                    cx = ((x1 + x2) / 2.0) / float(img_w)
+                    cy = ((y1 + y2) / 2.0) / float(img_h)
+                    bw = (x2 - x1) / float(img_w)
+                    bh = (y2 - y1) / float(img_h)
+                    lines.append(f"{int(class_id)} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
+            return lines
+
+        def _write_label_file_for_mode(self, image_path: str, rects: list[list[float]], mode: str) -> None:
+            img_w, img_h = self._image_size_for_label_path(image_path)
+            if img_w <= 0 or img_h <= 0:
+                return
+            label_path = self._label_path_for_image(image_path)
+            lines = self._serialize_rects_for_mode(rects, img_w, img_h, mode)
+            with open(label_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + ("\n" if lines else ""))
+
+        def _convert_dataset_labels_to_obb(self) -> None:
+            if not self._image_paths:
+                return
+            current_path = self._image_paths[self._image_idx] if 0 <= self._image_idx < len(self._image_paths) else ""
+            for image_path in list(self._image_paths):
+                rects = self._labels_by_path.get(image_path)
+                if rects is None:
+                    img_w, img_h = self._image_size_for_label_path(image_path)
+                    if img_w <= 0 or img_h <= 0:
+                        continue
+                    rects = self._load_label_file_for_image(image_path, img_w, img_h)
+                    self._labels_by_path[image_path] = [list(r) for r in rects]
+                try:
+                    self._write_label_file_for_mode(image_path, rects, "obb")
+                except Exception:
+                    continue
+            if current_path:
+                self.lbl_status.setText("OBB detected: converted current dataset to YOLO OBB format")
 
         def _ensure_class_count_from_rects(self, rects: list[list[float]]) -> None:
             max_id = -1
@@ -4412,6 +4557,47 @@ def _build_main_window(startup_mode: str):
             if 0 <= int(cid) < len(self._class_names):
                 return str(self._class_names[int(cid)])
             return f"class{int(cid)}"
+
+        def _label_class_color_rgb(self, class_id: int) -> tuple[int, int, int]:
+            cid = int(class_id)
+            if cid in self._label_class_color_overrides:
+                return self._label_class_color_overrides[cid]
+            palette = [
+                (0, 230, 118),
+                (255, 149, 0),
+                (0, 179, 255),
+                (255, 82, 82),
+                (170, 85, 255),
+                (255, 214, 10),
+                (0, 245, 212),
+                (255, 64, 129),
+                (255, 255, 255),
+                (111, 207, 151),
+                (255, 112, 67),
+                (124, 179, 66),
+            ]
+            return palette[cid % len(palette)]
+
+        def _configure_label_class_color(self) -> None:
+            if not self._class_names:
+                return
+            items = [f"{idx}: {name}" for idx, name in enumerate(self._class_names)]
+            current_idx = self.class_combo.currentIndex()
+            if current_idx < 0 or current_idx >= len(items):
+                current_idx = 0
+            item, ok = QInputDialog.getItem(self, "Bounding Box Color", "Select class", items, current_idx, False)
+            if not ok or not str(item).strip():
+                return
+            try:
+                cid = int(str(item).split(":", 1)[0].strip())
+            except Exception:
+                return
+            r, g, b = self._label_class_color_rgb(cid)
+            picked = QColorDialog.getColor(QColor(int(r), int(g), int(b)), self, f"Select box color for class {cid}")
+            if not picked.isValid():
+                return
+            self._label_class_color_overrides[cid] = (int(picked.red()), int(picked.green()), int(picked.blue()))
+            self.canvas.update()
 
         def _refresh_selected_detail(self) -> None:
             if not hasattr(self, "lbl_selected_detail"):
@@ -4680,6 +4866,7 @@ def _build_main_window(startup_mode: str):
             cur_path = self._image_paths[self._image_idx]
             if hasattr(self, "canvas") and self.canvas is not None:
                 self._labels_by_path[cur_path] = [list(r) for r in self.canvas.rects]
+            self._ensure_label_format_mode()
 
         def _save_current_label(self, silent: bool = False) -> None:
             if not self._image_paths:
@@ -4689,29 +4876,9 @@ def _build_main_window(startup_mode: str):
             rects = self._labels_by_path.get(img_path, [])
             if self._last_bgr is None:
                 return
-            h, w = self._last_bgr.shape[:2]
             label_path = self._label_path_for_image(img_path)
-            lines: list[str] = []
-            for rect in rects:
-                x1, y1, x2, y2 = rect[:4]
-                class_id = int(rect[4]) if len(rect) >= 5 else 0
-                angle = float(rect[5]) if len(rect) >= 6 else 0.0
-                x1, y1 = max(0.0, min(w, x1)), max(0.0, min(h, y1))
-                x2, y2 = max(0.0, min(w, x2)), max(0.0, min(h, y2))
-                if x2 <= x1 or y2 <= y1:
-                    continue
-                rect_norm = [x1, y1, x2, y2, class_id, angle]
-                corners = self.canvas._rect_corners(rect_norm)
-                xy: list[str] = []
-                for px, py in corners:
-                    nx = max(0.0, min(1.0, px / w))
-                    ny = max(0.0, min(1.0, py / h))
-                    xy.append(f"{nx:.6f}")
-                    xy.append(f"{ny:.6f}")
-                lines.append(f"{int(class_id)} " + " ".join(xy))
             try:
-                with open(label_path, "w", encoding="utf-8") as f:
-                    f.write("\n".join(lines) + ("\n" if lines else ""))
+                self._write_label_file_for_mode(img_path, rects, self._label_format_mode)
                 if not silent:
                     self.lbl_status.setText(f"Saved: {os.path.basename(label_path)}")
                 else:
@@ -5168,6 +5335,33 @@ def _build_main_window(startup_mode: str):
                 return os.path.join(self._project_root, "removed")
             return os.path.join(self._project_dir or os.getcwd(), "removed")
 
+        def _current_project_uses_obb(self) -> bool:
+            if str(getattr(self, "_label_format_mode", "detect")).strip().lower() == "obb":
+                return True
+            for img_path in self._iter_labeled_images():
+                label_path = self._label_path_for_image(img_path)
+                if not os.path.isfile(label_path):
+                    continue
+                try:
+                    with open(label_path, "r", encoding="utf-8") as f:
+                        for raw in f:
+                            parts = raw.strip().split()
+                            if len(parts) >= 9:
+                                return True
+                except Exception:
+                    continue
+            return False
+
+        def _default_training_model_path(self) -> str:
+            model_dir = os.path.join(os.path.dirname(__file__), "models")
+            default_detect = os.path.join(model_dir, "yolo26m.pt")
+            default_obb = os.path.join(model_dir, "yolo26m-obb.pt")
+            if self._current_project_uses_obb() and os.path.isfile(default_obb):
+                return default_obb
+            if os.path.isfile(default_detect):
+                return default_detect
+            return self._detect_model_path or default_detect
+
         def _remove_current_image(self) -> None:
             if not self._image_paths:
                 return
@@ -5209,7 +5403,7 @@ def _build_main_window(startup_mode: str):
             if not labeled_images:
                 QMessageBox.warning(self, "Train", "No labeled images found.")
                 return
-            default_model = self._detect_model_default_path if os.path.isfile(self._detect_model_default_path) else self._detect_model_path
+            default_model = self._default_training_model_path()
             settings = TrainSettingsDialog(self, default_model=default_model)
             if settings.exec() != QDialog.DialogCode.Accepted:
                 return
@@ -5220,9 +5414,13 @@ def _build_main_window(startup_mode: str):
             epochs = int(payload["epochs"])
             imgsz = int(payload["imgsz"])
             batch = int(payload["batch"])
+            device_mode = str(payload.get("device_mode", "auto") or "auto").strip().lower() or "auto"
 
             self._training_running = True
             self._training_stop_requested = False
+            self._training_started_at = time.time()
+            self._training_total_epochs = max(0, int(epochs))
+            self._training_current_epoch = 0
             self.btn_train.setEnabled(False)
             self._open_training_monitor_popup()
 
@@ -5256,22 +5454,55 @@ def _build_main_window(startup_mode: str):
                     with open(yaml_path, "w", encoding="utf-8") as f:
                         f.write("\n".join(yaml_lines) + "\n")
 
-                    yolo_cli = shutil.which("yolo")
-                    if not yolo_cli:
-                        raise RuntimeError("yolo CLI not found. Please install ultralytics.")
+                    training_python = self._resolve_training_python()
+                    if getattr(sys, "frozen", False) and os.path.abspath(training_python) == os.path.abspath(sys.executable):
+                        self._append_training_log_async("[runtime] training_runtime not found. Building runtime automatically ...")
+                        self._auto_build_training_runtime()
+                        training_python = self._resolve_training_python()
+                    runner_path = os.path.join(os.path.dirname(__file__), "train_runner.py")
+                    if not os.path.isfile(runner_path):
+                        raise RuntimeError(
+                            "train_runner.py is missing in this build. Rebuild the app with train_runner.py included."
+                        )
+                    if getattr(sys, "frozen", False):
+                        if os.path.abspath(training_python) == os.path.abspath(sys.executable):
+                            raise RuntimeError(
+                                "Packaged app requires an external training_runtime. "
+                                "Run build_training_runtime.bat next to the packaged app first."
+                            )
+                    job_path = os.path.join(tmp_root, "train_job.json")
+                    train_items: list[dict[str, str]] = []
+                    for img_path in labeled_images:
+                        name = os.path.basename(img_path)
+                        stem = os.path.splitext(name)[0]
+                        copied_img = os.path.join(train_img_dir, name)
+                        copied_lbl = os.path.join(train_lbl_dir, f"{stem}.txt")
+                        if os.path.isfile(copied_img) and os.path.isfile(copied_lbl):
+                            train_items.append({"image": copied_img, "label": copied_lbl})
+                    with open(job_path, "w", encoding="utf-8") as f:
+                        json.dump(
+                            {
+                                "model_path": model_path,
+                                "epochs": epochs,
+                                "imgsz": imgsz,
+                                "batch": batch,
+                                "out_dir": os.path.abspath(out_dir),
+                                "run_name": run_name,
+                                "cwd": os.path.abspath(self._project_root or self._project_dir or os.getcwd()),
+                                "device": device_mode,
+                                "class_names": list(self._class_names),
+                                "train_items": train_items,
+                                "val_items": train_items,
+                            },
+                            f,
+                            ensure_ascii=True,
+                            indent=2,
+                        )
                     cmd = [
-                        yolo_cli,
-                        "train",
-                        f"model={model_path}",
-                        f"data={yaml_path}",
-                        f"epochs={epochs}",
-                        f"imgsz={imgsz}",
-                        f"batch={batch}",
-                        f"project={os.path.abspath(out_dir)}",
-                        f"name={run_name}",
-                        "exist_ok=True",
-                        "verbose=True",
-                        f"device={self._auto_train_device()}",
+                        training_python,
+                        runner_path,
+                        "--job",
+                        job_path,
                     ]
                     cmd_text = " ".join(f'"{p}"' if " " in p else p for p in cmd)
                     run_cwd = self._project_root or self._project_dir or os.getcwd()
@@ -5283,6 +5514,7 @@ def _build_main_window(startup_mode: str):
                     self._append_training_log_async("=" * 80)
                     self.training_command_signal.emit(f"{run_cwd}> {cmd_text}")
                     self.training_status_signal.emit("Training running...")
+                    self._emit_training_progress()
 
                     proc = subprocess.Popen(
                         cmd,
@@ -5304,6 +5536,7 @@ def _build_main_window(startup_mode: str):
                                 continue
                             print(line, flush=True)
                             self._append_training_log_async(line)
+                            self._consume_training_log_line(line)
                     rc = proc.wait()
                     self._training_process = None
                     if self._training_stop_requested:
@@ -5335,6 +5568,7 @@ def _build_main_window(startup_mode: str):
             dlg.activateWindow()
             dlg.txt_log.clear()
             dlg.set_command("")
+            dlg.set_progress_summary("Progress: 0/0 (0.0%)", "Elapsed: 00:00", "ETA: -")
 
         def _stop_training_process(self) -> None:
             if not self._training_running:
@@ -5357,6 +5591,61 @@ def _build_main_window(startup_mode: str):
                 return
             self._train_monitor_dialog.set_command(command_text)
 
+        def _format_duration_text(self, seconds_value: float | int) -> str:
+            total = max(0, int(float(seconds_value or 0)))
+            hours, rem = divmod(total, 3600)
+            minutes, seconds = divmod(rem, 60)
+            if hours > 0:
+                return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+            return f"{minutes:02d}:{seconds:02d}"
+
+        def _emit_training_progress(self) -> None:
+            elapsed = time.time() - float(self._training_started_at or 0.0) if self._training_started_at else 0.0
+            total = max(0, int(self._training_total_epochs or 0))
+            current = max(0, int(self._training_current_epoch or 0))
+            if total > 0:
+                percent = min(100.0, max(0.0, (float(current) / float(total)) * 100.0))
+                progress_text = f"Progress: {current}/{total} ({percent:.1f}%)"
+            else:
+                progress_text = "Progress: -"
+            elapsed_text = f"Elapsed: {self._format_duration_text(elapsed)}"
+            if current > 0 and total > current and elapsed > 0:
+                avg_epoch = elapsed / float(current)
+                eta_seconds = avg_epoch * float(total - current)
+                eta_text = f"ETA: {self._format_duration_text(eta_seconds)}"
+            elif total > 0 and current >= total:
+                eta_text = "ETA: 00:00"
+            else:
+                eta_text = "ETA: -"
+            self.training_progress_signal.emit(progress_text, elapsed_text, eta_text)
+
+        def _consume_training_log_line(self, line: str) -> None:
+            text = str(line or "").strip()
+            if not text:
+                return
+            clean = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", text).strip()
+            if not clean:
+                return
+            m_total = re.search(r"Starting training for\s+(\d+)\s+epochs", clean, flags=re.IGNORECASE)
+            if m_total:
+                try:
+                    self._training_total_epochs = max(0, int(m_total.group(1)))
+                except Exception:
+                    pass
+                self._emit_training_progress()
+                return
+            m_epoch = re.match(r"^(\d+)\s*/\s*(\d+)\b", clean)
+            if m_epoch:
+                try:
+                    current = int(m_epoch.group(1))
+                    total = int(m_epoch.group(2))
+                except Exception:
+                    return
+                if total > 0:
+                    self._training_total_epochs = max(self._training_total_epochs, total)
+                    self._training_current_epoch = max(self._training_current_epoch, current)
+                    self._emit_training_progress()
+
         def _append_training_log(self, message: str) -> None:
             if self._train_monitor_dialog is None:
                 return
@@ -5368,17 +5657,145 @@ def _build_main_window(startup_mode: str):
         def _on_training_status(self, text: str) -> None:
             self.lbl_status.setText(str(text))
 
+        def _on_training_progress(self, progress_text: str, elapsed_text: str, eta_text: str) -> None:
+            if self._train_monitor_dialog is None:
+                return
+            self._train_monitor_dialog.set_progress_summary(progress_text, elapsed_text, eta_text)
+
         def _on_training_done(self, output_path: str) -> None:
+            self._training_current_epoch = max(self._training_current_epoch, self._training_total_epochs)
+            self._emit_training_progress()
             self.lbl_status.setText("Training finished")
             QMessageBox.information(self, "Train", f"Training finished.\nOutput:\n{output_path}")
 
         def _on_training_failed(self, message: str) -> None:
+            self._emit_training_progress()
             self.lbl_status.setText("Training failed")
             QMessageBox.critical(self, "Train", f"Training failed:\n{message}")
 
         def _on_training_finalize(self) -> None:
             self._training_running = False
             self.btn_train.setEnabled(True)
+
+        def _resolve_training_python(self) -> str:
+            repo_root = Path(__file__).resolve().parents[2]
+            candidate_roots: list[Path] = []
+            exe_dir = Path(sys.executable).resolve().parent
+            preferred_roots = [
+                exe_dir,
+                exe_dir.parent if exe_dir.parent != exe_dir else exe_dir,
+            ]
+            for root in preferred_roots:
+                candidate_roots.append(root)
+            for raw in [self._project_root, self._project_dir, str(repo_root), str(repo_root.parent)]:
+                text = str(raw or "").strip()
+                if not text:
+                    continue
+                root = Path(text).resolve()
+                candidate_roots.append(root)
+                if root.parent != root:
+                    candidate_roots.append(root.parent)
+            seen: set[str] = set()
+            for root in candidate_roots:
+                key = str(root)
+                if key in seen:
+                    continue
+                seen.add(key)
+                for rel in [
+                    "training_runtime/python.exe",
+                    "training_runtime/Scripts/python.exe",
+                    ".venv/Scripts/python.exe",
+                    "venv/Scripts/python.exe",
+                    "runtime/python.exe",
+                    "runtime/Scripts/python.exe",
+                    "python/python.exe",
+                    "python/Scripts/python.exe",
+                    "cuda_env/Scripts/python.exe",
+                    "train_env/Scripts/python.exe",
+                ]:
+                    candidate = root / rel
+                    if candidate.is_file():
+                        return str(candidate.resolve())
+            return sys.executable
+
+        def _resolve_training_builder_script(self) -> str:
+            candidate = os.path.join(os.path.dirname(__file__), "auto_build_training_runtime.py")
+            return os.path.abspath(candidate) if os.path.isfile(candidate) else ""
+
+        def _resolve_host_python_for_runtime_builder(self) -> str:
+            candidates: list[str] = []
+            local_python = os.path.join(
+                os.environ.get("LOCALAPPDATA", ""),
+                "Programs",
+                "Python",
+                "Python312",
+                "python.exe",
+            )
+            if local_python:
+                candidates.append(local_python)
+            for name in ("python.exe", "python", "py.exe", "py"):
+                found = shutil.which(name)
+                if found:
+                    candidates.append(found)
+            if not getattr(sys, "frozen", False):
+                candidates.append(sys.executable)
+            seen: set[str] = set()
+            for raw in candidates:
+                text = os.path.abspath(str(raw or "").strip())
+                if not text or text in seen:
+                    continue
+                seen.add(text)
+                if os.path.isfile(text):
+                    return text
+            return ""
+
+        def _auto_build_training_runtime(self) -> None:
+            target_root = os.path.abspath(str(Path(sys.executable).resolve().parent))
+            builder_script = self._resolve_training_builder_script()
+            if not builder_script:
+                raise RuntimeError(
+                    "auto_build_training_runtime.py is missing in this build. Rebuild the app with runtime builder scripts included."
+                )
+            host_python = self._resolve_host_python_for_runtime_builder()
+            if not host_python:
+                raise RuntimeError(
+                    "No usable system Python was found for auto-building training_runtime. "
+                    "Install Python or build training_runtime manually."
+                )
+            cmd = [host_python, builder_script, target_root]
+            cmd_text = " ".join(f'"{p}"' if " " in p else p for p in cmd)
+            self._append_training_log_async("=" * 80)
+            self._append_training_log_async(f"{target_root}> {cmd_text}")
+            self._append_training_log_async("=" * 80)
+            proc = subprocess.Popen(
+                cmd,
+                cwd=target_root,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+            try:
+                if proc.stdout is not None:
+                    for raw in proc.stdout:
+                        line = str(raw).rstrip("\r\n")
+                        if not line:
+                            continue
+                        self._append_training_log_async(line)
+                rc = proc.wait()
+            finally:
+                try:
+                    if proc.stdout is not None:
+                        proc.stdout.close()
+                except Exception:
+                    pass
+            if rc != 0:
+                raise RuntimeError(f"Auto build training_runtime failed with code {rc}")
+            training_python = self._resolve_training_python()
+            if os.path.abspath(training_python) == os.path.abspath(sys.executable):
+                raise RuntimeError("training_runtime was not created successfully.")
 
         def _auto_train_device(self) -> str:
             try:

@@ -1,6 +1,7 @@
-import base64
+﻿import base64
 import io
 import sys, re, os, json
+import datetime as dt
 from collections import defaultdict, Counter
 import pandas as pd
 from openpyxl import Workbook
@@ -175,8 +176,8 @@ def load_data(path):
             "sub_id":           str(row.get("sub_id", "")).strip(),
             "prefix":           _record_id_key({"id": row.get("id", ""), "image_name": name}),
             "detected_classes": detected,
-            "golden_mode":      str(row.get("golden_mode", "—")).strip() if has_golden else "—",
-            "iou_threshold":    str(row.get("iou_threshold", "—")).strip() if has_golden else "—",
+            "golden_mode":      str(row.get("golden_mode", "")).strip() if has_golden else "",
+            "iou_threshold":    str(row.get("iou_threshold", "")).strip() if has_golden else "",
             "status":           status,
             "reason":           str(row.get("reason", "")).strip() if has_golden else "",
             "details":          details,
@@ -196,6 +197,42 @@ def load_data(path):
             ),
         })
     return records, has_golden
+
+
+def _parse_report_timestamp(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return dt.datetime.strptime(text, fmt)
+        except Exception:
+            continue
+    try:
+        return dt.datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def _compute_total_duration(records):
+    stamps = [_parse_report_timestamp(r.get("timestamp", "")) for r in records]
+    stamps = [s for s in stamps if s is not None]
+    if len(stamps) < 2:
+        return None
+    return max(0, int(round((max(stamps) - min(stamps)).total_seconds())))
+
+
+def _format_duration_text(total_seconds):
+    if total_seconds is None:
+        return "N/A"
+    total_seconds = max(0, int(total_seconds))
+    hours, rem = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(rem, 60)
+    if hours > 0:
+        return f"{hours}h {minutes}m {seconds}s"
+    if minutes > 0:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
 
 
 def parse_classes(s):
@@ -225,7 +262,7 @@ def get_prefix(name):
 
 def _valid_token(raw):
     text = str(raw or "").strip()
-    bad = {"", "none", "null", "n/a", "na", "no_id", "unreadable_id", "no_sub_id", "unreadable_sub_id", "無"}
+    bad = {"", "none", "null", "n/a", "na", "no_id", "unreadable_id", "no_sub_id", "unreadable_sub_id", "??"}
     return text if text.lower() not in bad else ""
 
 
@@ -400,6 +437,8 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
     pass_cnt   = status_counts.get("PASS", 0)
     na_cnt     = total_img - fail_cnt - pass_cnt
     pass_rate  = round(pass_cnt / total_img * 100, 1) if total_img else 0
+    total_duration = _compute_total_duration(records)
+    total_duration_text = _format_duration_text(total_duration)
 
     ws = wb.active
     ws.title = "Raw Data"
@@ -426,8 +465,8 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
     for i, r in enumerate(records, 2):
         row_fill = ALT_F if i % 2 == 0 else PatternFill("solid", start_color="FFFFFF")
         if has_golden:
-            matched_str = f"{r['matched']}/{r['total']}" if r['matched'] is not None else "—"
-            iou_str     = f"{r['avg_iou']:.3f}" if r['avg_iou'] is not None else "—"
+            matched_str = f"{r['matched']}/{r['total']}" if r['matched'] is not None else "??"
+            iou_str     = f"{r['avg_iou']:.3f}" if r['avg_iou'] is not None else "??"
             vals = [r["timestamp"], r["image_name"], r["status"], r.get("reason", ""), r["prefix"],
                     r["detected_classes"], r["golden_mode"], r["iou_threshold"],
                     matched_str, iou_str, r["details"],
@@ -448,7 +487,7 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
 
     ws2 = wb.create_sheet("Summary")
 
-    shdr(ws2, 1, 1, "📊  Detection Summary Report", 4)
+    shdr(ws2, 1, 1, "Detection Summary Report", 4)
     ws2.row_dimensions[1].height = 26
 
     kpis = [("Total Images", total_img), ("PASS", pass_cnt), ("FAIL", fail_cnt)]
@@ -456,6 +495,7 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
         kpis.append(("Pass Rate", f"{pass_rate}%"))
         if iou_values:
             kpis.append(("Avg IoU", f"{round(sum(iou_values)/len(iou_values),3)}"))
+    kpis.append(("Total Duration", total_duration_text))
     kpis.append(("Component Classes", len(sorted_classes)))
 
     ws2.cell(row=3, column=1, value="Metric").font = Font(bold=True, name="Calibri")
@@ -510,7 +550,7 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
     for r_idx, (prefix, stats) in enumerate(sorted(prefix_stats.items()), start_row+2):
         fill = ALT_F if r_idx % 2 == 0 else PatternFill("solid", start_color="FFFFFF")
         if has_golden:
-            avg_iou = round(stats["iou_sum"]/stats["iou_count"], 3) if stats["iou_count"] else "—"
+            avg_iou = round(stats["iou_sum"]/stats["iou_count"], 3) if stats["iou_count"] else "??"
             vals = [prefix, stats["count"], stats["pass"], stats["fail"], avg_iou]
         else:
             avg_c = round(stats["total_components"]/stats["count"], 1) if stats["count"] else 0
@@ -645,7 +685,7 @@ def build_excel(records, sorted_classes, class_img_count, prefix_stats,
             ws4.column_dimensions[col].width = w
 
     wb.save(out_path)
-    print(f"  ✅ Excel → {out_path}")
+    print(f"  Excel -> {out_path}")
 
 def build_html(records, sorted_classes, class_img_count, prefix_stats,
                status_counts, iou_values, has_golden, out_path):
@@ -658,6 +698,8 @@ def build_html(records, sorted_classes, class_img_count, prefix_stats,
     avg_comp   = round(total_comp/total_img, 1) if total_img else 0
     avg_iou    = round(sum(iou_values)/len(iou_values), 3) if iou_values else None
     ts_label   = str(records[0]["timestamp"]) if records else "N/A"
+    total_duration = _compute_total_duration(records)
+    total_duration_text = _format_duration_text(total_duration)
     sup = build_supervisor_metrics(records)
 
     cat_data   = sorted(prefix_stats.items())
@@ -715,7 +757,7 @@ def build_html(records, sorted_classes, class_img_count, prefix_stats,
     cat_rows = ""
     for prefix, stats in cat_data:
         avg = round(stats["total_components"]/stats["count"], 1) if stats["count"] else 0
-        avg_iou_cat = f"{round(stats['iou_sum']/stats['iou_count'],3):.3f}" if stats["iou_count"] else "—"
+        avg_iou_cat = f"{round(stats['iou_sum']/stats['iou_count'],3):.3f}" if stats["iou_count"] else "??"
         pass_badge = f'<span class="badge pass">{stats["pass"]} PASS</span>' if has_golden else ""
         fail_badge = f'<span class="badge fail">{stats["fail"]} FAIL</span>' if has_golden else ""
         iou_cell   = f'<td class="num">{avg_iou_cat}</td>' if has_golden else ""
@@ -750,7 +792,7 @@ def build_html(records, sorted_classes, class_img_count, prefix_stats,
     piece_heatmap_html = ""
 
     if has_golden:
-        iou_kpi = f'<div class="kpi blue"><div class="val">{avg_iou if avg_iou else "—"}</div><div class="lbl">Avg IoU</div></div>'
+        iou_kpi = f'<div class="kpi blue"><div class="val">{avg_iou if avg_iou is not None else "??"}</div><div class="lbl">Avg IoU</div></div>'
         iou_chart = f"""
     <div class="card">
       <div class="card-title">IoU Score Distribution</div>
@@ -1027,7 +1069,7 @@ td.num {{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:#94a3b8 }
     <div class="header-icon">gekoai</div>
     <div class="header-text">
       <h1>Component Detection Dashboard</h1>
-      <p>{ts_label} &nbsp;|&nbsp; {total_img} images &nbsp;|&nbsp; {'IoU threshold: ' + str(records[0]['iou_threshold']) if has_golden else 'Detection-only mode'}</p>
+      <p>{ts_label} &nbsp;|&nbsp; {total_img} images &nbsp;|&nbsp; Total duration: {total_duration_text} &nbsp;|&nbsp; {'IoU threshold: ' + str(records[0]['iou_threshold']) if has_golden else 'Detection-only mode'}</p>
     </div>
     <div class="mode-badge">{'GOLDEN COMPARISON' if has_golden else 'DETECTION ONLY'}</div>
   </div>
@@ -1042,6 +1084,7 @@ td.num {{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:#94a3b8 }
     {'<div class="kpi red"><div class="val">' + str(fail_cnt) + '</div><div class="lbl">FAIL</div></div>' if has_golden else ''}
     {'<div class="kpi green"><div class="val">' + str(pass_rate) + '%</div><div class="lbl">Pass Rate</div></div>' if has_golden else ''}
     {iou_kpi}
+    <div class="kpi blue"><div class="val">{total_duration_text}</div><div class="lbl">Total Duration</div></div>
     <div class="kpi purple"><div class="val">{len(sorted_classes)}</div><div class="lbl">Classes</div></div>
     <div class="kpi yellow"><div class="val">{total_comp}</div><div class="lbl">Components</div></div>
     <div class="kpi blue"><div class="val">{avg_comp}</div><div class="lbl">Avg/Image</div></div>
@@ -1165,7 +1208,7 @@ new Chart(document.getElementById("catComp"),{{
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
-    print(f"  ✅ HTML  → {out_path}")
+    print(f"  HTML  -> {out_path}")
 
 def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
               status_counts, iou_values, has_golden, out_path):
@@ -1176,7 +1219,7 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
             from weasyprint import HTML  # type: ignore
 
             HTML(filename=html_path).write_pdf(out_path)
-            print(f"  ✅ PDF   → {out_path} (from HTML)")
+            print(f"  PDF   -> {out_path} (from HTML)")
             return
         except Exception:
             pass
@@ -1215,7 +1258,7 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
                 try:
                     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                     if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
-                        print(f"  ✅ PDF   → {out_path} (from HTML)")
+                        print(f"  PDF   -> {out_path} (from HTML)")
                         return
                 except Exception:
                     continue
@@ -1225,7 +1268,7 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
             import subprocess
 
             subprocess.run(["wkhtmltopdf", html_path, out_path], check=True)
-            print(f"  ✅ PDF   → {out_path} (from HTML)")
+            print(f"  PDF   -> {out_path} (from HTML)")
             return
         except Exception:
             pass
@@ -1270,6 +1313,8 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
     total_comp = sum(r["total_components"] for r in records)
     avg_iou    = round(sum(iou_values)/len(iou_values), 3) if iou_values else None
     ts_label   = str(records[0]["timestamp"]) if records else ""
+    total_duration = _compute_total_duration(records)
+    total_duration_text = _format_duration_text(total_duration)
     cat_data   = sorted(prefix_stats.items())
     PW         = W - 2.8*cm  # printable width
 
@@ -1322,7 +1367,7 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
     mode_txt = "GOLDEN COMPARISON MODE" if has_golden else "DETECTION-ONLY MODE"
     cov.add(String(14, 44, "Component Detection Report", fontSize=20,
                    fillColor=WHITE, fontName="Helvetica-Bold"))
-    cov.add(String(14, 26, f"{ts_label}   ·   {total_img} images   ·   {mode_txt}",
+    cov.add(String(14, 26, f"{ts_label}   繚   {total_img} images   繚   {total_duration_text}   繚   {mode_txt}",
                    fontSize=9, fillColor=colors.HexColor("#93c5fd"), fontName="Helvetica"))
     story.append(cov)
     story.append(Spacer(1, 14))
@@ -1339,6 +1384,7 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
         ]
         if avg_iou: kpi_items.append(("Avg IoU", str(avg_iou), colors.HexColor("#0e7490")))
     kpi_items += [
+        ("Total Duration", total_duration_text, colors.HexColor("#1d4ed8")),
         ("Classes",    str(len(sorted_classes)), colors.HexColor("#6d28d9")),
         ("Components", str(total_comp),           colors.HexColor("#b45309")),
     ]
@@ -1458,8 +1504,8 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
         hdr = ["ID", "Images", "PASS", "FAIL", "Pass Rate", "Avg IoU"]
         rows = []
         for prefix, stats in cat_data:
-            rate = f"{round(stats['pass']/stats['count']*100,1)}%" if stats['count'] else "—"
-            avg_i = f"{round(stats['iou_sum']/stats['iou_count'],3):.3f}" if stats['iou_count'] else "—"
+            rate = f"{round(stats['pass']/stats['count']*100,1)}%" if stats['count'] else "??"
+            avg_i = f"{round(stats['iou_sum']/stats['iou_count'],3):.3f}" if stats['iou_count'] else "??"
             rows.append([prefix, stats["count"], stats["pass"], stats["fail"], rate, avg_i])
         cws = [PW*f for f in [0.28, 0.12, 0.12, 0.12, 0.18, 0.18]]
         t = mk_table(hdr, rows, cws)
@@ -1487,15 +1533,15 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
     story.append(Spacer(1, 12))
 
     story.append(PageBreak())
-    story.append(sec_bar(f"Raw Detection Data — first 60 rows of {len(records)}"))
+    story.append(sec_bar(f"Raw Detection Data - first 60 rows of {len(records)}"))
     story.append(Spacer(1, 6))
 
     if has_golden:
         raw_hdr  = ["Image Name","Status","Matched","Avg IoU","ID","Mode"]
         raw_rows = []
         for r in records[:60]:
-            matched_s = f"{r['matched']}/{r['total']}" if r['matched'] is not None else "—"
-            iou_s     = f"{r['avg_iou']:.3f}" if r['avg_iou'] is not None else "—"
+            matched_s = f"{r['matched']}/{r['total']}" if r['matched'] is not None else "??"
+            iou_s     = f"{r['avg_iou']:.3f}" if r['avg_iou'] is not None else "??"
             raw_rows.append([r["image_name"], r["status"], matched_s, iou_s,
                              r["prefix"], r["golden_mode"]])
         cws3 = [PW*f for f in [0.30, 0.10, 0.13, 0.12, 0.20, 0.15]]
@@ -1504,26 +1550,26 @@ def build_pdf(records, sorted_classes, class_img_count, prefix_stats,
         raw_hdr  = ["Image Name","ID","Detected Classes","Components"]
         raw_rows = []
         for r in records[:60]:
-            dc = r["detected_classes"][:60] + ("…" if len(r["detected_classes"])>60 else "")
+            dc = r["detected_classes"][:60] + ("..." if len(r["detected_classes"]) > 60 else "")
             raw_rows.append([r["image_name"], r["prefix"], dc, r["total_components"]])
         cws3 = [PW*f for f in [0.22, 0.14, 0.52, 0.12]]
         story.append(mk_table(raw_hdr, raw_rows, cws3))
 
     if len(records) > 60:
         story.append(Spacer(1, 6))
-        story.append(Paragraph(f"… and {len(records)-60} more rows in the Excel report.",
+        story.append(Paragraph(f"...and {len(records)-60} more rows in the Excel report.",
                                 body_style))
 
     def footer(canvas, doc):
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(GRAY)
-        canvas.drawString(1.4*cm, 0.7*cm, "Component Detection Report — Auto-generated")
+        canvas.drawString(1.4*cm, 0.7*cm, "Component Detection Report - Auto-generated")
         canvas.drawRightString(W-1.4*cm, 0.7*cm, f"Page {doc.page}")
         canvas.restoreState()
 
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
-    print(f"  ✅ PDF   → {out_path}")
+    print(f"  PDF   -> {out_path}")
 
 def main():
     if len(sys.argv) < 2:
@@ -1532,7 +1578,7 @@ def main():
 
     path = sys.argv[1]
     if not os.path.exists(path):
-        print(f"❌ File not found: {path}")
+        print(f"File not found: {path}")
         sys.exit(1)
 
     base     = os.path.splitext(path)[0]
@@ -1540,25 +1586,26 @@ def main():
     html_out = base + "_dashboard.html"
     pdf_out  = base + "_dashboard.pdf"
 
-    print(f"\n📂 Reading: {path}")
+    print(f"\nReading: {path}")
     records, has_golden = load_data(path)
     fmt = "Format A (golden comparison)" if has_golden else "Format B (detection only)"
-    print(f"   {len(records)} rows — {fmt}")
+    print(f"   {len(records)} rows -> {fmt}")
 
     STATUS_ORDER = {"FAIL": 0, "PASS": 1}
     records.sort(key=lambda r: STATUS_ORDER.get(r["status"].upper(), 2))
 
     sc, ci, ps, st, iou_vals = aggregate(records)
 
-    print("\n📊 Excel…")
+    print("\nBuilding Excel...")
     build_excel(records, sc, ci, ps, st, iou_vals, has_golden, xlsx_out)
-    print("🌐 HTML…")
+    print("Building HTML...")
     build_html(records, sc, ci, ps, st, iou_vals, has_golden, html_out)
-    print("📄 PDF…")
+    print("Building PDF...")
     build_pdf(records, sc, ci, ps, st, iou_vals, has_golden, pdf_out)
 
-    print(f"\n✨ Done!\n   {xlsx_out}\n   {html_out}\n   {pdf_out}\n")
+    print(f"\nDone.\n   {xlsx_out}\n   {html_out}\n   {pdf_out}\n")
 
 
 if __name__ == "__main__":
     main()
+

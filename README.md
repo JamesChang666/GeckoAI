@@ -2,29 +2,52 @@
 
 Desktop image annotation tool for object detection datasets (PySide6 + Ultralytics).
 
-## PySide6 Migration Status
+## Reading Paths
 
-- Phase 1 complete: `geckoai-qt` launcher is available.
-- Phase 2 complete: Detect setup wizard (model/source/output/conf) is Qt-native.
-- Phase 3 complete: Detect setup supports golden/OCR parameters in Qt and passes them into the original detect workflow.
-- Current scope:
-  - Qt-native startup launcher window
-  - `Label / Detect / Legacy Home` mode selection
-  - Detect setup in Qt, detect workspace and runtime keep original behavior
-  - Label workflow still uses the stable Tkinter app
-- Install Qt launcher dependency:
+- Desktop users: start from `Desktop Quick Start`.
+- Integration / automation users: jump to `Detect CLI` and `Automation Guide`.
+
+## Desktop Status
+
+- Desktop launcher and workspaces are PySide6-based.
+- Label mode, Detect mode, and combined launcher mode run from the desktop app.
+- Detect CLI is available for headless batch integration.
+- Install desktop dependency:
 
 ```bash
 pip install -e ".[qt]"
 ```
 
-- Run Qt launcher:
+- Run desktop launcher:
 
 ```bash
 geckoai-qt
 ```
 
-## Features
+## Desktop Quick Start
+
+Install:
+
+```bash
+pip install .
+```
+
+Run:
+
+```bash
+geckoai
+```
+
+Desktop entrypoints:
+
+```bash
+geckoai-all
+geckoai-label
+geckoai-detect
+geckoai-qt
+```
+
+## Desktop Features
 
 - Bounding-box annotation with drag, move, and resize handles
 - Rotated bounding boxes:
@@ -53,6 +76,13 @@ geckoai-qt
     - List model classes and assign per-class box colors
     - Double-click class row to set color quickly
     - Classes without assigned color use auto-generated deterministic colors
+- Detect CLI:
+  - Folder batch detect without GUI
+  - Golden folder support
+  - Background-cut golden support
+  - OCR ID/Sub ID support
+  - Watch mode for newly added images
+  - JSON summary and process exit-code control for automation
 - Startup source selection:
   - Dropdown chooser (default: `Open Images Folder`)
   - Open YOLO Dataset
@@ -94,6 +124,28 @@ geckoai-qt
   - Right-click on a ghost box to paste only that clicked box
 - Right-click drag to draw new box directly
 
+## Automation Guide
+
+Use Detect CLI when you need:
+
+- no GUI
+- batch processing
+- production-line folder monitoring
+- JSON summary for another system
+- process exit code control for pass/fail gating
+
+CLI entrypoint:
+
+```bash
+geckoai-cli detect --help
+```
+
+Or:
+
+```bash
+python -m ai_labeller.cli detect --help
+```
+
 ## Repositories
 
 - Desktop app (this repo): `https://github.com/JamesChang666/GeckoAI`
@@ -128,12 +180,6 @@ your_project/
 ```
 
 ## Install
-
-From PyPI:
-
-```bash
-pip install GeckoAI
-```
 
 From local wheel:
 
@@ -171,15 +217,86 @@ Or:
 python src/ai_labeller/main.py
 ```
 
-Single-mode entrypoints:
+All entrypoints:
 
 ```bash
 geckoai-all
 geckoai-label
 geckoai-detect
 geckoai-qt
+geckoai-cli detect --help
 geckoai-report <detect_results_xxx.csv>
 ```
+
+## Detect CLI
+
+This section is intended for automation and system integration.
+
+Basic batch detect:
+
+```bash
+python -m ai_labeller.cli detect \
+  --model C:\path\best.pt \
+  --source C:\path\images \
+  --output C:\path\results
+```
+
+Golden detect:
+
+```bash
+python -m ai_labeller.cli detect \
+  --model C:\path\best.pt \
+  --source C:\path\images \
+  --output C:\path\results \
+  --golden-dir C:\path\golden \
+  --golden-mode both \
+  --golden-iou 0.5
+```
+
+Watch only new images:
+
+```bash
+python -m ai_labeller.cli detect \
+  --model C:\path\best.pt \
+  --source C:\path\incoming \
+  --output C:\path\results \
+  --watch \
+  --watch-once-initial false \
+  --watch-interval 2
+```
+
+Automation-friendly output:
+
+```bash
+python -m ai_labeller.cli detect \
+  --model C:\path\best.pt \
+  --source C:\path\images \
+  --output C:\path\results \
+  --save-json C:\path\results\summary.json \
+  --summary-stdout \
+  --fail-exit-code 10
+```
+
+Main options:
+
+- `--golden-dir`: enable golden mode.
+- `--golden-mode`: `class`, `position`, or `both`.
+- `--golden-iou`: IoU threshold for golden matching.
+- `--include-id-in-match`: include OCR ID/Sub ID regions in golden match.
+- `--device`: `auto`, `gpu`, or `cpu`.
+- `--watch`: watch the folder continuously.
+- `--watch-once-initial false`: do not process existing images on startup.
+- `--class-color-map`: inline class colors like `0=#FF0000,1=0,255,0` or a JSON file path.
+- `--save-json`: write summary JSON to a file or folder.
+- `--summary-stdout`: print summary JSON to stdout.
+- `--fail-exit-code`: return a non-zero exit code when any FAIL record exists.
+
+Typical integration patterns:
+
+- Run once on a folder and collect reports.
+- Run in `--watch` mode for incoming images.
+- Use `--summary-stdout` for parent-process parsing.
+- Use `--fail-exit-code` for machine or line-stop decisions.
 
 ## Build EXE (Windows)
 
@@ -195,6 +312,7 @@ Build one target:
 powershell -ExecutionPolicy Bypass -File .\scripts\build_exe.ps1 -Target all
 powershell -ExecutionPolicy Bypass -File .\scripts\build_exe.ps1 -Target label
 powershell -ExecutionPolicy Bypass -File .\scripts\build_exe.ps1 -Target detect
+pyinstaller -y .\GeckoAI-CLI.spec
 ```
 
 Output:
@@ -203,6 +321,14 @@ Output:
 dist/GeckoAI-All/GeckoAI-All.exe
 dist/GeckoAI-Label/GeckoAI-Label.exe
 dist/GeckoAI-Detect/GeckoAI-Detect.exe
+dist/GeckoAI-CLI/GeckoAI-CLI.exe
+```
+
+Packaged CLI usage:
+
+```powershell
+.\dist\GeckoAI-CLI\GeckoAI-CLI.exe detect --help
+.\dist\GeckoAI-CLI\GeckoAI-CLI.exe detect --model C:\path\best.pt --source C:\path\images --output C:\path\results
 ```
 
 ## Shortcuts
@@ -223,11 +349,12 @@ dist/GeckoAI-Detect/GeckoAI-Detect.exe
 - Default detection model mode is `Official YOLO26m.pt (Bundled)`.
 - If the official model file is unavailable locally, import a custom `.pt/.onnx` model from the UI.
 - If CUDA/GPU runtime is incompatible, detection/training automatically falls back to CPU.
+- Detect CLI also falls back from GPU to CPU automatically. After the first GPU failure, the remaining run stays on CPU.
 - Detect mode in golden background-cut workflow:
   - Each cut piece is written as an image and detected
   - `F`/`D` navigation reuses cached results instead of re-detecting the same source image
   - CSV report rows are written once per unique image/piece key
-- To use your own Tk app icon, put `app_icon.png` in `src/ai_labeller/assets/`.
+- To use your own app icon, put `app_icon.png` in `src/ai_labeller/assets/`.
 - Session file: `~/.ai_labeller_session.json`.
 - Project progress YAML: `<project_root>/.ai_labeller_progress.yaml` (resume split/image and class names after reopen).
 - Flat image folder mode defaults classes to `0`, `1`, `2`.
