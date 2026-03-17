@@ -128,6 +128,21 @@ def _build_main_window(startup_mode: str):
                 return os.path.abspath(p)
         return ""
 
+    def _prompt_cut_background_threshold(parent: Any, initial: float = 0.3) -> float | None:
+        value = max(0.01, min(1.0, float(initial)))
+        picked, ok = QInputDialog.getDouble(
+            parent,
+            "Cut Background Confidence",
+            "Template match confidence (0.01 - 1.00):",
+            value,
+            0.01,
+            1.0,
+            2,
+        )
+        if not ok:
+            return None
+        return max(0.01, min(1.0, float(picked)))
+
     def _load_logo_pixmap(size: int = 18) -> QPixmap:
         icon_path = _resolve_app_icon_path()
         if not icon_path:
@@ -353,7 +368,7 @@ def _build_main_window(startup_mode: str):
             self.imgsz.setValue(640)
             self.batch = QSpinBox(self)
             self.batch.setRange(-1, 512)
-            self.batch.setValue(-1)
+            self.batch.setValue(8)
             self.batch.setSpecialValueText("Auto (-1)")
             self.device_mode = QComboBox(self)
             self.device_mode.addItem("Auto (Prefer GPU)", "auto")
@@ -1010,25 +1025,46 @@ def _build_main_window(startup_mode: str):
                 if board is None or getattr(board, "size", 0) == 0:
                     QMessageBox.warning(self, "Golden Template", f"Failed to read image:\n{board_path}")
                     return
-                roi = cut_background_detect.select_adjustable_template_roi(
+                template_pick = cut_background_detect.select_polygon_template(
                     board,
-                    "Adjust Golden Template",
+                    "Adjust Golden Template Polygon",
                 )
-                if roi is None:
+                if template_pick is None:
                     QMessageBox.information(self, "Golden Template", "Template update cancelled.")
                     return
-                x, y, w, h = map(int, roi)
+                crop, mask, bbox, polygon_points = template_pick
+                x, y, w, h = map(int, bbox)
                 if w <= 1 or h <= 1:
                     QMessageBox.information(self, "Golden Template", "Template update cancelled.")
                     return
-                crop = board[y : y + h, x : x + w]
                 if crop is None or getattr(crop, "size", 0) == 0:
                     QMessageBox.warning(self, "Golden Template", "Invalid template area.")
                     return
                 template_path = os.path.join(bundle_dir, "golden_template.png")
+                template_mask_path = os.path.join(bundle_dir, "golden_template_mask.png")
                 if not cv2.imwrite(template_path, crop):
                     QMessageBox.warning(self, "Golden Template", f"Failed to save template:\n{template_path}")
                     return
+                if not cv2.imwrite(template_mask_path, mask):
+                    QMessageBox.warning(self, "Golden Template", f"Failed to save template mask:\n{template_mask_path}")
+                    return
+                rules_path = os.path.join(bundle_dir, "golden_rules.json")
+                if os.path.isfile(rules_path):
+                    try:
+                        with open(rules_path, "r", encoding="utf-8") as f:
+                            rules_payload = json.load(f)
+                        current_thr = float(rules_payload.get("match_threshold", 0.3))
+                        new_thr = _prompt_cut_background_threshold(self, current_thr)
+                        if new_thr is None:
+                            QMessageBox.information(self, "Golden Template", "Template update cancelled.")
+                            return
+                        rules_payload["template_bbox_xywh"] = [int(x), int(y), int(w), int(h)]
+                        rules_payload["template_polygon_points"] = polygon_points
+                        rules_payload["match_threshold"] = float(new_thr)
+                        with open(rules_path, "w", encoding="utf-8") as f:
+                            json.dump(rules_payload, f, ensure_ascii=False, indent=2)
+                    except Exception:
+                        pass
             except Exception as exc:
                 QMessageBox.critical(self, "Golden Template", f"Adjust template failed:\n{exc}")
                 return
@@ -3872,10 +3908,14 @@ def _build_main_window(startup_mode: str):
                         return
                 except Exception:
                     pass
+                threshold = _prompt_cut_background_threshold(self, 0.3)
+                if threshold is None:
+                    return
                 try:
                     result = cut_background_detect.run_cut_background_batch_with_golden(
                         path,
                         golden_image_path=golden_image_path,
+                        threshold=threshold,
                         parent=self,
                     )
                 except Exception as exc:
@@ -3997,10 +4037,14 @@ def _build_main_window(startup_mode: str):
                             return
                     except Exception:
                         pass
+                    threshold = _prompt_cut_background_threshold(self, 0.3)
+                    if threshold is None:
+                        return
                     try:
                         result = cut_background_detect.run_cut_background_batch_with_golden(
                             path,
                             golden_image_path=golden_image_path,
+                            threshold=threshold,
                             parent=self,
                         )
                     except Exception as exc:
@@ -5158,6 +5202,8 @@ def _build_main_window(startup_mode: str):
                 templ_dst = os.path.join(dst_bg_root, "golden_template.png")
                 _copy_with_fallback(bundle.rules_path, rules_dst)
                 _copy_with_fallback(bundle.template_path, templ_dst)
+                if bundle.template_mask_path and os.path.isfile(bundle.template_mask_path):
+                    _copy_with_fallback(bundle.template_mask_path, os.path.join(dst_bg_root, "golden_template_mask.png"))
                 board_src = os.path.join(os.path.dirname(bundle.rules_path), "golden_board.png")
                 if os.path.isfile(board_src):
                     _copy_with_fallback(board_src, os.path.join(dst_bg_root, "golden_board.png"))

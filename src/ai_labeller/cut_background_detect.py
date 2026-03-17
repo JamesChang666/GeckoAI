@@ -219,6 +219,177 @@ def select_adjustable_template_roi(
     return _select_adjustable_roi(image, window_title, initial_window_size=initial_window_size)
 
 
+def select_polygon_template(
+    image: np.ndarray,
+    window_title: str = "Select Golden Template Polygon",
+    initial_window_size: tuple[int, int] = (1100, 760),
+) -> tuple[np.ndarray, np.ndarray, tuple[int, int, int, int], list[list[int]]] | None:
+    h, w = image.shape[:2]
+    if h <= 1 or w <= 1:
+        return None
+    state: dict[str, Any] = {
+        "points": [],
+        "mouse": None,
+    }
+
+    def _clamp(v: int, lo: int, hi: int) -> int:
+        return int(max(lo, min(hi, v)))
+
+    def _normalized_points() -> list[tuple[int, int]]:
+        out: list[tuple[int, int]] = []
+        for px, py in state.get("points", []):
+            x = _clamp(int(px), 0, w - 1)
+            y = _clamp(int(py), 0, h - 1)
+            if out and out[-1] == (x, y):
+                continue
+            out.append((x, y))
+        return out
+
+    def _mouse(event: int, x: int, y: int, flags: int, param: Any) -> None:
+        del flags, param
+        x = _clamp(int(x), 0, w - 1)
+        y = _clamp(int(y), 0, h - 1)
+        state["mouse"] = (x, y)
+        if event == cv2.EVENT_LBUTTONDOWN:
+            pts = list(state.get("points", []))
+            pts.append((x, y))
+            state["points"] = pts
+
+    cv2.namedWindow(window_title, cv2.WINDOW_NORMAL)
+    try:
+        win_w, win_h = initial_window_size
+        cv2.resizeWindow(window_title, int(win_w), int(win_h))
+    except Exception:
+        pass
+    cv2.setMouseCallback(window_title, _mouse)
+    try:
+        while True:
+            canvas = image.copy()
+            pts = _normalized_points()
+            mouse_pt = state.get("mouse")
+            if len(pts) >= 2:
+                cv2.polylines(
+                    canvas,
+                    [np.array(pts, dtype=np.int32)],
+                    False,
+                    (40, 230, 40),
+                    2,
+                    cv2.LINE_AA,
+                )
+            if pts and isinstance(mouse_pt, tuple):
+                cv2.line(canvas, pts[-1], mouse_pt, (0, 220, 255), 1, cv2.LINE_AA)
+            for idx, pt in enumerate(pts, start=1):
+                cv2.circle(canvas, pt, 5, (255, 255, 255), -1, cv2.LINE_AA)
+                cv2.circle(canvas, pt, 3, (40, 230, 40), -1, cv2.LINE_AA)
+                cv2.putText(
+                    canvas,
+                    str(idx),
+                    (pt[0] + 6, pt[1] - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    (255, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+                cv2.putText(
+                    canvas,
+                    str(idx),
+                    (pt[0] + 6, pt[1] - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    (30, 30, 30),
+                    1,
+                    cv2.LINE_AA,
+                )
+            cv2.putText(
+                canvas,
+                "Left-click: add point | Backspace: undo | R: redraw | Enter: confirm polygon | Esc: cancel",
+                (10, 24),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                canvas,
+                "Left-click: add point | Backspace: undo | R: redraw | Enter: confirm polygon | Esc: cancel",
+                (10, 24),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (30, 30, 30),
+                1,
+                cv2.LINE_AA,
+            )
+            if len(pts) >= 3:
+                cv2.polylines(
+                    canvas,
+                    [np.array(pts, dtype=np.int32)],
+                    True,
+                    (0, 180, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
+            cv2.imshow(window_title, canvas)
+            key = cv2.waitKey(20) & 0xFF
+            if key in (13, 10):
+                pts = _normalized_points()
+                if len(pts) < 3:
+                    continue
+                polygon = np.array(pts, dtype=np.int32)
+                x, y, tw, th = cv2.boundingRect(polygon)
+                if tw <= 1 or th <= 1:
+                    continue
+                crop = image[y : y + th, x : x + tw].copy()
+                if crop.size == 0:
+                    continue
+                shifted = polygon - np.array([[x, y]], dtype=np.int32)
+                mask = np.zeros((th, tw), dtype=np.uint8)
+                cv2.fillPoly(mask, [shifted], 255)
+                crop_points = [[int(px), int(py)] for px, py in shifted.tolist()]
+                return crop, mask, (int(x), int(y), int(tw), int(th)), crop_points
+            if key == 27:
+                return None
+            if key in (ord("r"), ord("R")):
+                state["points"] = []
+                continue
+            if key in (8, 127):
+                pts = list(state.get("points", []))
+                if pts:
+                    pts.pop()
+                    state["points"] = pts
+    finally:
+        try:
+            cv2.destroyWindow(window_title)
+            cv2.waitKey(1)
+        except Exception:
+            pass
+
+
+def _apply_template_mask(template_gray: np.ndarray, template_mask: np.ndarray | None) -> np.ndarray:
+    if template_mask is None or template_mask.size == 0:
+        return template_gray
+    mask = template_mask
+    if len(mask.shape) == 3:
+        mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(mask, 1, 255, cv2.THRESH_BINARY)
+    return cv2.bitwise_and(template_gray, template_gray, mask=mask)
+
+
+def _match_template_with_optional_mask(
+    board_gray: np.ndarray,
+    template_gray: np.ndarray,
+    template_mask: np.ndarray | None = None,
+) -> np.ndarray:
+    if template_mask is None or template_mask.size == 0:
+        return cv2.matchTemplate(board_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+    mask = template_mask
+    if len(mask.shape) == 3:
+        mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(mask, 1, 255, cv2.THRESH_BINARY)
+    return cv2.matchTemplate(board_gray, template_gray, cv2.TM_CCORR_NORMED, mask=mask)
+
+
 def _order_points(pts: np.ndarray) -> np.ndarray:
     rect = np.zeros((4, 2), dtype="float32")
     s = pts.sum(axis=1)
@@ -442,6 +613,7 @@ class BackgroundCutBundle:
     root_dir: str
     rules_path: str
     template_path: str
+    template_mask_path: str | None
     board_hsv: np.ndarray
     bg_hsv: np.ndarray | None
     h_tol: int
@@ -449,6 +621,7 @@ class BackgroundCutBundle:
     v_tol: int
     match_threshold: float
     template_bgr: np.ndarray
+    template_mask: np.ndarray | None
     id_mode: bool
     id_roi_xywh: tuple[int, int, int, int] | None
 
@@ -533,19 +706,17 @@ def run_cut_background_batch_with_golden(
 
     messagebox.showinfo(
         "Golden Setup - Step 3",
-        "Draw a box around the Golden Template.\n"
-        "After drawing, drag 8 handles to adjust.\n"
-        "R: redraw | ENTER: confirm | ESC: cancel.",
+        "Click points around the Golden Template to make a polygon.\n"
+        "BACKSPACE: undo last point | R: redraw | ENTER: confirm | ESC: cancel.",
         parent=parent,
     )
-    roi = _select_adjustable_roi(golden_board, "Select Golden Template")
-
-    if roi is None:
+    template_pick = select_polygon_template(golden_board, "Select Golden Template Polygon")
+    if template_pick is None:
         return None
-    x, y, w, h = map(int, roi)
+    golden_template, golden_template_mask, template_bbox, template_polygon_points = template_pick
+    x, y, w, h = map(int, template_bbox)
     if w <= 0 or h <= 0:
         return None
-    golden_template = golden_board[y : y + h, x : x + w].copy()
     if golden_template.size == 0:
         return None
 
@@ -564,10 +735,13 @@ def run_cut_background_batch_with_golden(
         "match_threshold": float(threshold),
         "id_mode": bool(id_mode_enabled),
         "id_roi_xywh": id_roi_xywh,
+        "template_bbox_xywh": [int(x), int(y), int(w), int(h)],
+        "template_polygon_points": template_polygon_points,
     }
     with open(os.path.join(golden_dir, "golden_rules.json"), "w", encoding="utf-8") as f:
         json.dump(rules_json, f, ensure_ascii=False, indent=2)
     cv2.imwrite(os.path.join(golden_dir, "golden_template.png"), golden_template)
+    cv2.imwrite(os.path.join(golden_dir, "golden_template_mask.png"), golden_template_mask)
     cv2.imwrite(os.path.join(golden_dir, "golden_board.png"), golden_board)
     with open(os.path.join(golden_dir, "golden_source_path.txt"), "w", encoding="utf-8") as f:
         f.write(os.path.abspath(golden_image_path) + "\n")
@@ -582,7 +756,7 @@ def run_cut_background_batch_with_golden(
         messagebox.showwarning("Cut Background", "No images found to process.", parent=parent)
         return None
 
-    templ_gray = _enhance_gray(golden_template)
+    templ_gray = _apply_template_mask(_enhance_gray(golden_template), golden_template_mask)
     templ_h, templ_w = templ_gray.shape[:2]
     total_crops = 0
     processed = 0
@@ -623,7 +797,7 @@ def run_cut_background_batch_with_golden(
                 with open(os.path.join(image_dir, "meta.json"), "w", encoding="utf-8") as f:
                     json.dump(meta, f, ensure_ascii=False, indent=2)
                 continue
-            result = cv2.matchTemplate(board_gray, templ_gray, cv2.TM_CCOEFF_NORMED)
+            result = _match_template_with_optional_mask(board_gray, templ_gray, golden_template_mask)
             matches = _find_rois_by_minmax(
                 result,
                 templ_w,
@@ -715,10 +889,19 @@ def load_background_cut_bundle(root_dir: str) -> BackgroundCutBundle | None:
     template_bgr = cv2.imread(template_path)
     if template_bgr is None or template_bgr.size == 0:
         raise ValueError(f"Failed to load template image: {template_path}")
+    template_mask_path = os.path.join(os.path.dirname(template_path), "golden_template_mask.png")
+    template_mask = None
+    if os.path.isfile(template_mask_path):
+        template_mask = cv2.imread(template_mask_path, cv2.IMREAD_GRAYSCALE)
+        if template_mask is not None and template_mask.size > 0:
+            _, template_mask = cv2.threshold(template_mask, 1, 255, cv2.THRESH_BINARY)
+        else:
+            template_mask = None
     return BackgroundCutBundle(
         root_dir=os.path.abspath(root_dir),
         rules_path=os.path.abspath(rules_path),
         template_path=os.path.abspath(template_path),
+        template_mask_path=os.path.abspath(template_mask_path) if template_mask is not None else None,
         board_hsv=board_hsv,
         bg_hsv=bg_hsv,
         h_tol=h_tol,
@@ -726,6 +909,7 @@ def load_background_cut_bundle(root_dir: str) -> BackgroundCutBundle | None:
         v_tol=v_tol,
         match_threshold=max(0.01, min(1.0, thr)),
         template_bgr=template_bgr,
+        template_mask=template_mask,
         id_mode=id_mode,
         id_roi_xywh=id_roi_xywh,
     )
@@ -742,13 +926,13 @@ def extract_cut_pieces_from_bgr(image_bgr: np.ndarray, bundle: BackgroundCutBund
     warped = _apply_crop_logic(image_bgr, params)
     if warped is None:
         return []
-    templ_gray = _enhance_gray(bundle.template_bgr)
+    templ_gray = _apply_template_mask(_enhance_gray(bundle.template_bgr), bundle.template_mask)
     board_gray = _enhance_gray(warped)
     templ_h, templ_w = templ_gray.shape[:2]
     bh, bw = board_gray.shape[:2]
     if bh < templ_h or bw < templ_w:
         return []
-    result = cv2.matchTemplate(board_gray, templ_gray, cv2.TM_CCOEFF_NORMED)
+    result = _match_template_with_optional_mask(board_gray, templ_gray, bundle.template_mask)
     matches = _find_rois_by_minmax(
         result,
         templ_w,
