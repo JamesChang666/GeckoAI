@@ -10,6 +10,39 @@ from openpyxl.chart import BarChart, Reference
 from openpyxl.utils import get_column_letter
 
 
+def _resolve_app_icon_path():
+    candidates = [
+        os.path.join(os.path.dirname(__file__), "assets", "app_icon.png"),
+        os.path.join(os.getcwd(), "src", "ai_labeller", "assets", "app_icon.png"),
+        os.path.join(os.getcwd(), "ai_labeller", "assets", "app_icon.png"),
+        os.path.join(os.getcwd(), "assets", "app_icon.png"),
+    ]
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return os.path.abspath(path)
+    return ""
+
+
+def _file_to_data_uri(path):
+    if not path or not os.path.isfile(path):
+        return ""
+    ext = os.path.splitext(path)[1].lower()
+    mime = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".svg": "image/svg+xml",
+        ".webp": "image/webp",
+    }.get(ext, "application/octet-stream")
+    try:
+        with open(path, "rb") as f:
+            data = base64.b64encode(f.read()).decode("ascii")
+        return f"data:{mime};base64,{data}"
+    except Exception:
+        return ""
+
+
 def _safe_detect_image_name(image_name):
     safe_name = str(image_name or "").strip() or "detect_result"
     safe_name = safe_name.replace("\\", "_").replace("/", "_").replace(":", "_")
@@ -700,6 +733,7 @@ def build_html(records, sorted_classes, class_img_count, prefix_stats,
     ts_label   = str(records[0]["timestamp"]) if records else "N/A"
     total_duration = _compute_total_duration(records)
     total_duration_text = _format_duration_text(total_duration)
+    app_icon_uri = _file_to_data_uri(_resolve_app_icon_path())
     sup = build_supervisor_metrics(records)
 
     cat_data   = sorted(prefix_stats.items())
@@ -951,7 +985,14 @@ header {{
   width:48px; height:48px; border-radius:12px;
   background:linear-gradient(135deg,#3b82f6,#8b5cf6);
   display:flex; align-items:center; justify-content:center;
-  font-size:13px; font-weight:700; font-family:'IBM Plex Mono',monospace; letter-spacing:.08em; flex-shrink:0;
+  overflow:hidden; flex-shrink:0;
+  border:1px solid rgba(255,255,255,.08);
+}}
+.header-icon img {{
+  width:100%; height:100%; object-fit:cover; display:block;
+}}
+.header-icon-fallback {{
+  font-size:13px; font-weight:700; font-family:'IBM Plex Mono',monospace; letter-spacing:.08em;
 }}
 .header-text h1 {{ font-size:20px; font-weight:700; letter-spacing:-0.3px }}
 .header-text p  {{ font-size:12px; color:var(--muted); margin-top:3px; font-family:'IBM Plex Mono',monospace }}
@@ -1066,7 +1107,7 @@ td.num {{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:#94a3b8 }
 <body>
 <header>
   <div class="header-inner">
-    <div class="header-icon">gekoai</div>
+    <div class="header-icon">{f'<img src="{app_icon_uri}" alt="GeckoAI logo" />' if app_icon_uri else '<span class="header-icon-fallback">GeckoAI</span>'}</div>
     <div class="header-text">
       <h1>Component Detection Dashboard</h1>
       <p>{ts_label} &nbsp;|&nbsp; {total_img} images &nbsp;|&nbsp; Total duration: {total_duration_text} &nbsp;|&nbsp; {'IoU threshold: ' + str(records[0]['iou_threshold']) if has_golden else 'Detection-only mode'}</p>
