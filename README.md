@@ -55,6 +55,14 @@ geckoai-qt
   - File Info shows total video duration plus current frame progress
   - A video timeline bar appears below the canvas and shows both frame and time progress
   - Drag the timeline bar to jump to another extracted frame quickly
+  - Video-only track tools appear in label mode:
+    - `Start Track` creates the first track anchor on the selected box
+    - `Track #` dropdown lets you reassign the selected box to a specific track ID
+    - `Keyframe` finalizes the second point, fills the in-between frames, converts them to real boxes, then exits tracking
+    - `Occluded` keeps the same track but marks the object as hidden
+    - `Outside` stops the track and removes that box from later frames
+  - YOLO export rebuilds labels from the current label/video state instead of copying stale txt files
+  - YOLO export also writes `tracks.json` so track IDs and track states are preserved beside standard YOLO txt labels
 - Rotated bounding boxes:
   - Drag rotate knob on selected box
   - 8 resize handles follow box rotation
@@ -124,6 +132,7 @@ geckoai-qt
   - Format dropdown (`YOLO (.txt)` / `JSON`)
   - `Export`
   - `Export Golden` (export golden folder)
+  - YOLO export includes `tracks.json` because standard YOLO txt does not store track IDs
 - Previous-label ghost workflow:
   - Optional ghost overlay of last image labels (dotted)
   - Right-click on a ghost box to paste only that clicked box

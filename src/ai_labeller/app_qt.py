@@ -59,6 +59,7 @@ def _build_main_window(startup_mode: str):
         return found
     try:
         from ai_labeller import cut_background_detect
+        from ai_labeller.features import label_project, label_tracking, label_video, label_video_state
         from ai_labeller.features import golden as golden_core
         from ai_labeller.features import ocr_utils
         from PySide6.QtCore import Qt, QTimer, QPointF, Signal
@@ -2436,6 +2437,7 @@ def _build_main_window(startup_mode: str):
             self.resolve_class_name = None
             self.resolve_class_color = None
             self.on_paste_prev_box = None
+            self.on_new_box_created = None
 
         def set_image(self, pixmap: QPixmap, img_w: int, img_h: int, rects: list[list[float]]) -> None:
             self._pixmap = pixmap
@@ -2698,6 +2700,10 @@ def _build_main_window(startup_mode: str):
                         painter.drawPolygon(poly)
                 for idx, rect in enumerate(self.rects):
                     class_id = int(rect[4]) if len(rect) >= 5 else 0
+                    rect_state = label_video_state.rect_state(rect)
+                    rect_track_id = label_video_state.rect_track_id(rect)
+                    rect_generated = label_video_state.is_generated(rect)
+                    rect_keyframe = label_video_state.is_keyframe(rect)
                     box_color = QColor("#00E676")
                     if callable(self.resolve_class_color):
                         try:
@@ -2712,6 +2718,14 @@ def _build_main_window(startup_mode: str):
                             box_color = QColor("#00E676")
                     pen = QPen(box_color)
                     pen.setWidth(2)
+                    if rect_state == label_video_state.STATE_OCCLUDED:
+                        pen.setStyle(Qt.PenStyle.CustomDashLine)
+                        pen.setDashPattern([1.2, 3.0])
+                    elif rect_state == label_video_state.STATE_OUTSIDE:
+                        pen.setStyle(Qt.PenStyle.DashLine)
+                    elif rect_generated:
+                        pen.setStyle(Qt.PenStyle.CustomDashLine)
+                        pen.setDashPattern([5.0, 4.0])
                     painter.setPen(pen)
                     corners = self._rect_corners(rect)
                     poly = QPolygonF()
@@ -2727,6 +2741,16 @@ def _build_main_window(startup_mode: str):
                             class_name = str(class_id)
                     angle_deg = self._rect_angle(rect)
                     label_text = class_name if abs(angle_deg) <= 1e-3 else f"{class_name} ({angle_deg:.1f}deg)"
+                    if rect_track_id is not None:
+                        label_text += f" #{int(rect_track_id)}"
+                    if rect_keyframe:
+                        label_text += " [K]"
+                    elif rect_generated:
+                        label_text += " [Auto]"
+                    if rect_state == label_video_state.STATE_OCCLUDED:
+                        label_text += " [Occ]"
+                    elif rect_state == label_video_state.STATE_OUTSIDE:
+                        label_text += " [Out]"
                     xs = [pt.x() for pt in poly]
                     ys = [pt.y() for pt in poly]
                     if xs and ys:
@@ -2948,6 +2972,11 @@ def _build_main_window(startup_mode: str):
                     self.rects.append([x1, y1, x2, y2, self._default_class_id, 0.0])
                     self.selected_idx = len(self.rects) - 1
                     self.selected_indices = {self.selected_idx}
+                    if callable(self.on_new_box_created):
+                        try:
+                            self.on_new_box_created(self.selected_idx)
+                        except Exception:
+                            pass
                     self._emit_rects_changed()
                     self._emit_selection_changed()
                     self._push_history()
@@ -3236,6 +3265,8 @@ def _build_main_window(startup_mode: str):
             self._video_label_total_seconds = 0.0
             self._video_label_fps = 0.0
             self._video_timeline_user_dragging = False
+            self._track_video_enabled = False
+            self._active_track_id: int | None = None
             self._theme_mode = "dark"
             self._training_process: subprocess.Popen[str] | None = None
             self._training_stop_requested = False
@@ -3281,7 +3312,7 @@ def _build_main_window(startup_mode: str):
                     "bg_white": "#FFFFFF",
                     "bg_canvas": "#EFEFF4",
                     "text_primary": "#000000",
-                    "text_secondary": "#5C5C5C",
+                    "text_secondary": "#1F2937",
                     "text_white": "#FFFFFF",
                     "toolbar_text": "#000000",
                     "toolbar_border": "#D1D1D6",
@@ -3298,7 +3329,7 @@ def _build_main_window(startup_mode: str):
                 "bg_white": "#FFFFFF",
                 "bg_canvas": "#18191B",
                 "text_primary": "#000000",
-                "text_secondary": "#8E8E93",
+                "text_secondary": "#374151",
                 "text_white": "#FFFFFF",
                 "toolbar_text": "#FFFFFF",
                 "toolbar_border": "#38383A",
@@ -3569,6 +3600,32 @@ def _build_main_window(startup_mode: str):
                 f"QPushButton{{background:{c['success']};color:{c['text_white']};border:none;border-radius:6px;padding:6px 10px;}}"
                 "QPushButton:hover{background:#0C8A48;}"
             )
+            self.lbl_track_help.setStyleSheet(f"color:{c['text_secondary']};font-weight:600;")
+            self.lbl_track_active.setStyleSheet(f"color:{c['text_primary']};font-weight:700;")
+            self.combo_track_pick.setStyleSheet(
+                f"QComboBox{{background:{c['bg_white']};color:{c['text_primary']};border:1px solid {c['border']};border-radius:6px;padding:4px;}}"
+                + combo_popup_style_panel
+            )
+            track_primary_style = (
+                f"QPushButton{{background:{c['primary']};color:{c['text_white']};border:none;border-radius:6px;padding:6px 10px;}}"
+                f"QPushButton:hover{{background:{c['primary_hover']};}}"
+            )
+            track_neutral_style = (
+                "QPushButton{background:#111827;color:#FFFFFF;border:none;border-radius:6px;padding:6px 10px;}"
+                "QPushButton:hover{background:#1F2937;}"
+            )
+            track_warn_style = (
+                "QPushButton{background:#B45309;color:#FFFFFF;border:none;border-radius:6px;padding:6px 10px;}"
+                "QPushButton:hover{background:#92400E;}"
+            )
+            track_end_style = (
+                f"QPushButton{{background:{c['danger']};color:{c['text_white']};border:none;border-radius:6px;padding:6px 10px;}}"
+                "QPushButton:hover{background:#C2410C;}"
+            )
+            self.btn_track_new.setStyleSheet(track_primary_style)
+            self.btn_track_keyframe.setStyleSheet(track_neutral_style)
+            self.btn_track_occluded.setStyleSheet(track_warn_style)
+            self.btn_track_end.setStyleSheet(track_end_style)
 
             self.btn_prev.setStyleSheet(
                 f"QPushButton{{background:{c['bg_white']};color:{c['text_primary']};border:1px solid {c['border']};border-radius:6px;padding:8px 12px;}}"
@@ -3634,6 +3691,15 @@ def _build_main_window(startup_mode: str):
                 "- Ctrl/Shift + Left click: multi-select toggle\n"
                 "- Right click: paste previous box at cursor; if none, quick draw\n"
                 "\n"
+                "Video Label Mode:\n"
+                "- Load from Video: extract frames and open them in label mode\n"
+                "- Timeline bar: jump by frame/time below the canvas\n"
+                "- Start Track: set the first track anchor on the selected box\n"
+                "- Track #: change the selected box to another track ID before keyframing\n"
+                "- Keyframe: set the later point, fill in-between frames, convert them to real boxes, then stop tracking\n"
+                "- Occluded: keep the track but mark the object as hidden\n"
+                "- Outside: stop the track after this frame and remove it from later frames\n"
+                "\n"
                 "Keyboard:\n"
                 "- D or Left Arrow: previous image\n"
                 "- F or Right Arrow: next image\n"
@@ -3687,6 +3753,7 @@ def _build_main_window(startup_mode: str):
             self.canvas.resolve_class_name = self._class_name_by_id
             self.canvas.resolve_class_color = self._label_class_color_rgb
             self.canvas.on_paste_prev_box = self._paste_prev_label_at
+            self.canvas.on_new_box_created = self._on_canvas_new_box_created
 
             canvas_panel = QWidget(root)
             self._canvas_panel = canvas_panel
@@ -3854,11 +3921,46 @@ def _build_main_window(startup_mode: str):
             self.chk_auto_detect.toggled.connect(self._on_auto_detect_toggled)
             self.chk_propagate = QCheckBox("Propagate Labels", ai_box)
             self.chk_propagate.toggled.connect(self._on_propagate_toggled)
+            self.video_track_tools_wrap = QWidget(ai_box)
+            video_track_layout = QVBoxLayout(self.video_track_tools_wrap)
+            video_track_layout.setContentsMargins(0, 0, 0, 0)
+            video_track_layout.setSpacing(6)
+            self.lbl_track_help = QLabel("Video tracking workflow: draw a box, press Start Track, then on a later frame draw or adjust the same object and press Keyframe.", self.video_track_tools_wrap)
+            self.lbl_track_help.setWordWrap(True)
+            video_track_layout.addWidget(self.lbl_track_help)
+            self.lbl_track_active = QLabel("Active track: none", self.video_track_tools_wrap)
+            self.lbl_track_active.setWordWrap(True)
+            video_track_layout.addWidget(self.lbl_track_active)
+            self.combo_track_pick = QComboBox(self.video_track_tools_wrap)
+            self.combo_track_pick.currentIndexChanged.connect(self._on_active_track_changed)
+            video_track_layout.addWidget(self.combo_track_pick)
+            row_track_start = QHBoxLayout()
+            row_track_start.setContentsMargins(0, 0, 0, 0)
+            self.btn_track_new = QPushButton("Start Track", self.video_track_tools_wrap)
+            self.btn_track_new.clicked.connect(self._create_new_track_from_selected)
+            self.btn_track_keyframe = QPushButton("Keyframe", self.video_track_tools_wrap)
+            self.btn_track_keyframe.clicked.connect(self._set_selected_track_keyframe)
+            row_track_start.addWidget(self.btn_track_new)
+            row_track_start.addWidget(self.btn_track_keyframe)
+            video_track_layout.addLayout(row_track_start)
+            row_track_state = QHBoxLayout()
+            row_track_state.setContentsMargins(0, 0, 0, 0)
+            self.btn_track_occluded = QPushButton("Occluded", self.video_track_tools_wrap)
+            self.btn_track_occluded.clicked.connect(self._mark_selected_track_occluded)
+            self.btn_track_end = QPushButton("Outside", self.video_track_tools_wrap)
+            self.btn_track_end.clicked.connect(self._mark_selected_track_outside)
+            row_track_state.addWidget(self.btn_track_occluded)
+            row_track_state.addWidget(self.btn_track_end)
+            video_track_layout.addLayout(row_track_state)
             self.combo_propagate_mode = QComboBox(ai_box)
             self.combo_propagate_mode.addItems(["if_missing", "always", "selected_only"])
             self.combo_propagate_mode.currentTextChanged.connect(self._on_propagate_mode_changed)
             self.chk_propagate.setChecked(False)
             self.combo_propagate_mode.setEnabled(False)
+            row_propagate = QHBoxLayout()
+            row_propagate.setContentsMargins(0, 0, 0, 0)
+            row_propagate.addWidget(self.chk_propagate, 0)
+            row_propagate.addWidget(self.combo_propagate_mode, 1)
             row_model = QHBoxLayout()
             self.combo_model = QComboBox(ai_box)
             self.combo_model.addItem("yolo26m (default)", "default_yolo26m")
@@ -3873,8 +3975,8 @@ def _build_main_window(startup_mode: str):
             ai_layout.addLayout(row_model)
             ai_layout.addWidget(self.btn_detect)
             ai_layout.addWidget(self.chk_auto_detect)
-            ai_layout.addWidget(self.chk_propagate)
-            ai_layout.addWidget(self.combo_propagate_mode)
+            ai_layout.addLayout(row_propagate)
+            ai_layout.addWidget(self.video_track_tools_wrap)
             panel_layout.addWidget(ai_box)
 
             scroll.setWidget(panel)
@@ -3903,322 +4005,160 @@ def _build_main_window(startup_mode: str):
             self._apply_theme_styles()
             self._refresh_class_widgets()
             self._on_model_combo_changed(self.combo_model.currentIndex())
+            self._update_video_tracking_controls()
 
         def _load_label_project(self, path: str, kind: str) -> None:
-            self._project_dir = os.path.abspath(path)
-            self._label_format_mode = "detect"
-            self._progress_state = self._read_progress_yaml(self._project_dir)
-            images_root = os.path.join(path, "images")
-            labels_root = os.path.join(path, "labels")
-            has_split = any(os.path.isdir(os.path.join(images_root, s)) for s in ("train", "val", "test"))
-            has_flat = os.path.isdir(images_root) and os.path.isdir(labels_root)
-            if kind == "yolo_dataset":
-                self._is_yolo_project = bool(has_split or has_flat)
-                if not self._is_yolo_project:
-                    QMessageBox.warning(
-                        self,
-                        "Load Project",
-                        "Selected folder is not a YOLO dataset root.\nExpected images/ and labels/ (with or without train|val|test splits).",
-                    )
-                    return
-            else:
-                self._is_yolo_project = bool(has_split or has_flat)
-            self._yolo_use_split_layout = bool(self._is_yolo_project and has_split)
-            if self._is_yolo_project:
-                self._project_root = path
-                available = [s for s in ("train", "val", "test") if os.path.isdir(os.path.join(images_root, s))]
-                self._load_class_names_from_dataset_yaml()
-                progress_split = str(self._progress_state.get("split", "")).strip().lower()
-                if progress_split in {"train", "val", "test"} and progress_split in available:
-                    self._current_split = progress_split
-                progress_class_names = self._extract_class_names_from_progress(self._progress_state)
-                if progress_class_names:
-                    self._class_names = progress_class_names
-                self.combo_split.setEnabled(self._yolo_use_split_layout)
-                self.combo_split.blockSignals(True)
-                self.combo_split.clear()
-                split_items = available if self._yolo_use_split_layout else ["all"]
-                self.combo_split.addItems(split_items)
-                if self._current_split not in split_items:
-                    self._current_split = "train" if self._yolo_use_split_layout and "train" in available else split_items[0]
-                self.combo_split.setCurrentText(self._current_split)
-                self.combo_split.blockSignals(False)
-                self._reload_images_for_current_source(reset_classes=False)
-                self._restore_progress_position()
-                self._save_progress_yaml()
-                return
-            self._project_root = ""
-            self._class_names = ["class0"]
-            progress_class_names = self._extract_class_names_from_progress(self._progress_state)
-            if progress_class_names:
-                self._class_names = progress_class_names
-            self.combo_split.setEnabled(False)
-            self._reload_images_for_current_source(reset_classes=False)
-            self._restore_progress_position()
-            self._save_progress_yaml()
+            label_project.load_label_project(self, path, kind, QMessageBox=QMessageBox)
 
         def _clear_video_label_meta(self) -> None:
-            self._video_label_source_name = ""
-            self._video_label_total_frames = 0
-            self._video_label_total_seconds = 0.0
-            self._video_label_fps = 0.0
-            self._video_timeline_user_dragging = False
-            self._update_video_timeline_ui()
+            label_video.clear_video_label_meta(self)
+            self._track_video_enabled = False
+            self._active_track_id = None
+            self._update_video_tracking_controls()
 
         def _set_video_label_meta(self, source_name: str, total_frames: int, total_seconds: float, fps: float) -> None:
-            self._video_label_source_name = str(source_name or "").strip()
-            self._video_label_total_frames = max(0, int(total_frames or 0))
-            self._video_label_total_seconds = max(0.0, float(total_seconds or 0.0))
-            self._video_label_fps = max(0.0, float(fps or 0.0))
-            self._video_timeline_user_dragging = False
-            self._update_video_timeline_ui()
+            label_video.set_video_label_meta(self, source_name, total_frames, total_seconds, fps)
+            self._update_video_tracking_controls()
+
+        def _is_video_label_mode(self) -> bool:
+            return label_video_state.is_video_label_mode(self)
+
+        def _refresh_track_picker(self) -> None:
+            if not hasattr(self, "combo_track_pick"):
+                return
+            active_track_id = label_tracking.get_active_track_id(self)
+            self.combo_track_pick.blockSignals(True)
+            self.combo_track_pick.clear()
+            self.combo_track_pick.addItem("Select track #...", 0)
+            for track_id, label in label_tracking.collect_track_items(self):
+                self.combo_track_pick.addItem(label, int(track_id))
+            if active_track_id is not None:
+                idx = self.combo_track_pick.findData(int(active_track_id))
+                if idx >= 0:
+                    self.combo_track_pick.setCurrentIndex(idx)
+            self.combo_track_pick.blockSignals(False)
+
+        def _update_video_tracking_controls(self) -> None:
+            is_video = self._is_video_label_mode()
+            if hasattr(self, "video_track_tools_wrap"):
+                self.video_track_tools_wrap.setVisible(is_video)
+            self._refresh_track_picker()
+            has_selection = bool(
+                hasattr(self, "canvas")
+                and self.canvas is not None
+                and self.canvas.selected_idx is not None
+                and 0 <= int(self.canvas.selected_idx) < len(self.canvas.rects)
+            )
+            controls_enabled = bool(is_video and has_selection)
+            for attr in ("btn_track_new", "btn_track_keyframe", "btn_track_occluded", "btn_track_end"):
+                if hasattr(self, attr):
+                    getattr(self, attr).setEnabled(controls_enabled)
+            if hasattr(self, "lbl_track_active"):
+                active_track_id = label_tracking.get_active_track_id(self)
+                self.lbl_track_active.setText(
+                    f"Active track: #{active_track_id}" if active_track_id is not None else "Active track: none"
+                )
+            if hasattr(self, "combo_track_pick"):
+                self.combo_track_pick.setEnabled(is_video and self.combo_track_pick.count() > 1)
+
+        def _apply_tracking_action(self, changed: int, message: str) -> None:
+            if changed <= 0:
+                self.lbl_status.setText(message)
+                self._update_video_tracking_controls()
+                return
+            self.canvas._push_history()
+            self._sync_canvas_rects_to_current_image()
+            self._rebuild_class_list_from_canvas()
+            self._refresh_selected_detail()
+            self.canvas.update()
+            self._schedule_autosave()
+            self.lbl_status.setText(message)
+            self._update_video_tracking_controls()
+
+        def _create_new_track_from_selected(self) -> None:
+            changed = label_tracking.mark_selected_as_new_track(self)
+            self._apply_tracking_action(changed, "Started new track anchor" if changed > 0 else "Select a box to start a track")
+
+        def _set_selected_track_keyframe(self) -> None:
+            changed = label_tracking.mark_selected_as_keyframe(self)
+            self._apply_tracking_action(changed, "Added keyframe" if changed > 0 else "Select a box on the active track first")
+            if changed > 0 and self._is_video_label_mode():
+                materialized = label_tracking.materialize_track(self)
+                self._track_video_enabled = False
+                if self._image_paths:
+                    self._show_current_image()
+                self.lbl_status.setText(
+                    f"Added keyframe and finalized track ({materialized} auto frames saved)"
+                    if materialized > 0
+                    else "Added keyframe and finalized track"
+                )
+                self._update_video_tracking_controls()
+
+        def _mark_selected_track_occluded(self) -> None:
+            changed = label_tracking.mark_selected_with_state(self, label_video_state.STATE_OCCLUDED)
+            self._apply_tracking_action(changed, "Marked track as occluded" if changed > 0 else "Select a tracked box first")
+
+        def _mark_selected_track_outside(self) -> None:
+            changed = label_tracking.mark_selected_with_state(self, label_video_state.STATE_OUTSIDE)
+            self._apply_tracking_action(changed, "Marked track as outside" if changed > 0 else "Select a tracked box first")
+
+        def _on_active_track_changed(self, index: int) -> None:
+            if not hasattr(self, "combo_track_pick"):
+                return
+            track_id = int(self.combo_track_pick.itemData(index) or 0)
+            if track_id <= 0:
+                label_tracking.set_active_track_id(self, None)
+                self._update_video_tracking_controls()
+                return
+            changed = label_tracking.attach_selected_to_track(self, track_id)
+            if changed > 0:
+                self._apply_tracking_action(changed, f"Selected box changed to track #{track_id}")
+                return
+            label_tracking.set_active_track_id(self, track_id)
+            if self._image_paths:
+                self._show_current_image()
+            else:
+                self._update_video_tracking_controls()
+
+        def _on_canvas_new_box_created(self, rect_idx: int) -> None:
+            changed = label_tracking.attach_new_box_to_generated_track(self, rect_idx)
+            if changed > 0:
+                self._sync_canvas_rects_to_current_image()
+                self._refresh_selected_detail()
+                self._update_video_tracking_controls()
+                self.lbl_status.setText("New box attached to the active track")
 
         def _format_video_time(self, seconds: float) -> str:
-            total_seconds = max(0, int(round(float(seconds or 0.0))))
-            hours, rem = divmod(total_seconds, 3600)
-            minutes, secs = divmod(rem, 60)
-            if hours > 0:
-                return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-            return f"{minutes:02d}:{secs:02d}"
+            return label_video.format_video_time(seconds)
 
         def _update_video_timeline_ui(self) -> None:
-            if self._video_label_total_frames <= 0:
-                self.video_timeline_slider.blockSignals(True)
-                self.video_timeline_slider.setMinimum(1)
-                self.video_timeline_slider.setMaximum(1)
-                self.video_timeline_slider.setValue(1)
-                self.video_timeline_slider.blockSignals(False)
-                self.lbl_video_timeline_summary.clear()
-                self.lbl_video_timeline_current.setText("00:00")
-                self.lbl_video_timeline_total.setText("00:00")
-                self.video_timeline_wrap.hide()
-                return
-            total_frames = max(1, int(self._video_label_total_frames))
-            current_frame = min(max(1, self._image_idx + 1), total_frames)
-            current_seconds = (float(current_frame) / float(self._video_label_fps)) if self._video_label_fps > 0 else 0.0
-            total_seconds = float(self._video_label_total_seconds or 0.0)
-            self.video_timeline_slider.blockSignals(True)
-            self.video_timeline_slider.setMinimum(1)
-            self.video_timeline_slider.setMaximum(total_frames)
-            self.video_timeline_slider.setPageStep(max(1, total_frames // 20))
-            self.video_timeline_slider.setValue(current_frame)
-            self.video_timeline_slider.blockSignals(False)
-            self.lbl_video_timeline_summary.setText(
-                f"Frame {current_frame} / {total_frames} | "
-                f"{self._format_video_time(current_seconds)} / {self._format_video_time(total_seconds)}"
-            )
-            self.lbl_video_timeline_current.setText(self._format_video_time(current_seconds))
-            self.lbl_video_timeline_total.setText(self._format_video_time(total_seconds))
-            self.video_timeline_wrap.show()
+            label_video.update_video_timeline_ui(self)
 
         def _on_video_timeline_changed(self, value: int) -> None:
-            if self._video_label_total_frames <= 0:
-                return
-            if getattr(self, "_video_timeline_user_dragging", False):
-                current_seconds = (float(value) / float(self._video_label_fps)) if self._video_label_fps > 0 else 0.0
-                self.lbl_video_timeline_summary.setText(
-                    f"Frame {int(value)} / {int(self._video_label_total_frames)} | "
-                    f"{self._format_video_time(current_seconds)} / {self._format_video_time(self._video_label_total_seconds)}"
-                )
-                self.lbl_video_timeline_current.setText(self._format_video_time(current_seconds))
+            label_video.on_video_timeline_changed(self, value)
 
         def _on_video_timeline_released(self) -> None:
-            self._video_timeline_user_dragging = False
-            if self._video_label_total_frames <= 0:
-                return
-            target_idx = int(self.video_timeline_slider.value()) - 1
-            if target_idx < 0 or target_idx >= len(self._image_paths):
-                self._update_video_timeline_ui()
-                return
-            if target_idx == self._image_idx:
-                self._update_video_timeline_ui()
-                return
-            self._image_idx = target_idx
-            self._show_current_image()
+            label_video.on_video_timeline_released(self)
 
         def _iter_label_images_recursive(self, root_dir: str) -> list[str]:
-            exts = {".jpg", ".jpeg", ".png", ".bmp"}
-            out: list[str] = []
-            for base, _dirs, files in os.walk(root_dir):
-                for name in files:
-                    p = os.path.join(base, name)
-                    if os.path.splitext(name)[1].lower() in exts and os.path.isfile(p):
-                        out.append(os.path.abspath(p))
-            out.sort()
-            return out
+            return label_video.iter_label_images_recursive(root_dir)
 
         def _prepare_cut_output_for_label(self, cut_output_dir: str) -> str | None:
-            src_images = self._iter_label_images_recursive(cut_output_dir)
-            if not src_images:
-                return None
-            ready_dir = os.path.join(cut_output_dir, "label_ready_images")
-            os.makedirs(ready_dir, exist_ok=True)
-            copied = 0
-            for src in src_images:
-                name = os.path.basename(src)
-                stem, ext = os.path.splitext(name)
-                rel_parent = os.path.basename(os.path.dirname(src))
-                base_stem = f"{rel_parent}_{stem}".replace(" ", "_")
-                dst = os.path.join(ready_dir, f"{base_stem}{ext}")
-                i = 1
-                while os.path.exists(dst):
-                    dst = os.path.join(ready_dir, f"{base_stem}_{i}{ext}")
-                    i += 1
-                try:
-                    shutil.copy2(src, dst)
-                    copied += 1
-                except Exception:
-                    continue
-            if copied <= 0:
-                return None
-            return ready_dir
+            return label_video.prepare_cut_output_for_label(cut_output_dir)
 
         def _maybe_run_cut_background_for_label(self, path: str, kind: str) -> tuple[str, str] | None:
-            if kind != "image_folder":
-                return os.path.abspath(path), kind
-            ask_cut = QMessageBox.question(
+            return label_video.maybe_run_cut_background_for_label(
                 self,
-                "Cut Background",
-                "Run cut background before labeling?\n(After cut, label will open on cut results directly.)",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                path,
+                kind,
+                cut_background_detect=cut_background_detect,
+                prompt_cut_background_threshold=_prompt_cut_background_threshold,
+                QFileDialog=QFileDialog,
+                QMessageBox=QMessageBox,
             )
-            if ask_cut != QMessageBox.StandardButton.Yes:
-                return os.path.abspath(path), kind
-            try:
-                import cv2  # type: ignore
-            except Exception as exc:
-                QMessageBox.critical(
-                    self,
-                    "Cut Background",
-                    "Cut background requires full desktop OpenCV.\n"
-                    f"OpenCV import failed: {exc}\n\n"
-                    "Fix:\n"
-                    "pip uninstall opencv-python-headless\n"
-                    "pip install opencv-python",
-                )
-                return None
-            missing = [name for name in ["imread", "namedWindow", "selectROI", "destroyWindow"] if not hasattr(cv2, name)]
-            if missing:
-                QMessageBox.critical(
-                    self,
-                    "Cut Background",
-                    "Cut background requires full desktop OpenCV.\n"
-                    f"OpenCV missing APIs: {', '.join(missing)}\n\n"
-                    "Fix:\n"
-                    "pip uninstall opencv-python-headless\n"
-                    "pip install opencv-python",
-                )
-                return None
-            golden_image_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Select one golden image in this folder",
-                os.path.abspath(path),
-                "Image files (*.png *.jpg *.jpeg *.bmp)",
-            )
-            if not golden_image_path:
-                return None
-            try:
-                if os.path.commonpath([os.path.abspath(path), os.path.abspath(golden_image_path)]) != os.path.abspath(path):
-                    QMessageBox.warning(self, "Cut Background", "Please select a golden image inside the selected folder.")
-                    return None
-            except Exception:
-                pass
-            threshold = _prompt_cut_background_threshold(self, 0.3)
-            if threshold is None:
-                return None
-            try:
-                result = cut_background_detect.run_cut_background_batch_with_golden(
-                    path,
-                    golden_image_path=golden_image_path,
-                    threshold=threshold,
-                    parent=self,
-                )
-            except Exception as exc:
-                msg = str(exc)
-                if "cvNamedWindow" in msg or "The function is not implemented" in msg:
-                    QMessageBox.critical(
-                        self,
-                        "Cut Background",
-                        "Cut background requires OpenCV GUI backend.\n"
-                        "Please install desktop OpenCV:\n"
-                        "pip uninstall opencv-python-headless\n"
-                        "pip install opencv-python",
-                    )
-                    return None
-                QMessageBox.critical(self, "Cut Background", f"Cut background failed:\n{exc}")
-                return None
-            if result is None:
-                return None
-            ready = self._prepare_cut_output_for_label(result.output_dir)
-            if not ready or not os.path.isdir(ready):
-                QMessageBox.warning(
-                    self,
-                    "Cut Background",
-                    "Cut background finished but no label-ready images were produced.",
-                )
-                return None
-            return os.path.abspath(ready), "image_folder"
 
         def _extract_video_frames_for_label(self, video_path: str, output_root: str) -> tuple[str, int, float, float] | None:
-            try:
-                import cv2  # type: ignore
-            except Exception as exc:
-                QMessageBox.critical(
-                    self,
-                    "Load from Video",
-                    "Video frame extraction requires OpenCV.\n"
-                    f"OpenCV import failed: {exc}",
-                )
-                return None
-            video_abs = os.path.abspath(video_path)
-            if not os.path.isfile(video_abs):
-                QMessageBox.warning(self, "Load from Video", "Video file does not exist.")
-                return None
-            stem = Path(video_abs).stem or "video"
-            frame_dir = os.path.join(
-                os.path.abspath(output_root),
-                f"{stem}_label_frames_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}",
-            )
-            os.makedirs(frame_dir, exist_ok=True)
-            cap = cv2.VideoCapture(video_abs)
-            if not cap.isOpened():
-                try:
-                    cap.release()
-                except Exception:
-                    pass
-                QMessageBox.warning(self, "Load from Video", "Failed to open selected video.")
-                return None
-            fps = 0.0
-            total_frame_count = 0
-            try:
-                fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-            except Exception:
-                fps = 0.0
-            try:
-                total_frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-            except Exception:
-                total_frame_count = 0
-            saved_count = 0
-            try:
-                while True:
-                    ok, frame = cap.read()
-                    if not ok or frame is None:
-                        break
-                    saved_count += 1
-                    out_path = os.path.join(frame_dir, f"{stem}_frame_{saved_count:06d}.jpg")
-                    if not cv2.imwrite(out_path, frame):
-                        saved_count -= 1
-            finally:
-                try:
-                    cap.release()
-                except Exception:
-                    pass
-            if saved_count <= 0:
-                QMessageBox.warning(self, "Load from Video", "No frames could be extracted from selected video.")
-                return None
-            effective_total_frames = saved_count if saved_count > 0 else max(0, total_frame_count)
-            total_seconds = (float(effective_total_frames) / float(fps)) if fps > 0 else 0.0
-            return os.path.abspath(frame_dir), effective_total_frames, total_seconds, fps
+            return label_video.extract_video_frames_for_label(self, video_path, output_root, QMessageBox=QMessageBox)
 
         def _open_from_camera_capture(self) -> None:
             self._clear_video_label_meta()
@@ -4319,66 +4259,19 @@ def _build_main_window(startup_mode: str):
             return os.path.join(base, ".ai_labeller_progress.yaml")
 
         def _read_progress_yaml(self, project_root: str) -> dict[str, str]:
-            key = os.path.abspath(project_root or self._project_root or self._project_dir or os.getcwd())
-            data = _session_progress_cache.get(key, {})
-            return dict(data) if isinstance(data, dict) else {}
+            return label_project.read_progress_yaml(self, project_root, _session_progress_cache)
 
         def _extract_class_names_from_progress(self, progress: dict[str, str]) -> list[str]:
-            try:
-                class_count = int(str(progress.get("class_count", "0")).strip())
-            except Exception:
-                class_count = 0
-            if class_count <= 0:
-                return []
-            out: list[str] = []
-            for idx in range(class_count):
-                name = str(progress.get(f"class_{idx}", "")).strip()
-                if not name:
-                    return []
-                out.append(name)
-            return out
+            return label_project.extract_class_names_from_progress(progress)
 
         def _yaml_q(self, value: str) -> str:
             return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
         def _save_progress_yaml(self) -> None:
-            if not self._project_dir and not self._project_root:
-                return
-            image_name = ""
-            image_index = int(self._image_idx)
-            if self._image_paths and 0 <= self._image_idx < len(self._image_paths):
-                image_name = os.path.basename(self._image_paths[self._image_idx])
-            project_root = os.path.abspath(self._project_root or self._project_dir)
-            data: dict[str, str] = {
-                "project_root": project_root,
-                "split": str(self._current_split),
-                "image_name": str(image_name),
-                "image_index": str(image_index),
-                "class_count": str(len(self._class_names)),
-                "updated_at": datetime.datetime.now().isoformat(timespec="seconds"),
-            }
-            for idx, class_name in enumerate(self._class_names):
-                data[f"class_{idx}"] = str(class_name)
-            _session_progress_cache[project_root] = data
+            label_project.save_progress_yaml(self, _session_progress_cache)
 
         def _restore_progress_position(self) -> None:
-            if not self._image_paths:
-                return
-            progress = self._progress_state or {}
-            target_name = str(progress.get("image_name", "")).strip()
-            if target_name:
-                for i, p in enumerate(self._image_paths):
-                    if os.path.basename(p) == target_name:
-                        self._image_idx = i
-                        self._show_current_image()
-                        return
-            try:
-                idx = int(str(progress.get("image_index", "0")).strip())
-            except Exception:
-                idx = 0
-            if 0 <= idx < len(self._image_paths):
-                self._image_idx = idx
-                self._show_current_image()
+            label_project.restore_progress_position(self)
 
         def _schedule_autosave(self) -> None:
             if not self._autosave_enabled:
@@ -4394,118 +4287,25 @@ def _build_main_window(startup_mode: str):
             self._save_progress_yaml()
 
         def _load_class_names_from_dataset_yaml(self) -> None:
-            if not self._project_root:
-                return
-            yaml_path = golden_core.find_dataset_yaml_in_folder(self._project_root)
-            if not yaml_path:
-                return
-            mapping = golden_core.load_mapping_from_dataset_yaml(yaml_path)
-            if not mapping:
-                return
-            max_id = max(mapping.keys())
-            classes = [f"class{i}" for i in range(max_id + 1)]
-            for idx, name in mapping.items():
-                if 0 <= idx < len(classes):
-                    classes[idx] = str(name)
-            if classes:
-                self._class_names = classes
+            label_project.load_class_names_from_dataset_yaml(self, golden_core=golden_core)
 
         def _scan_image_paths_for_current_source(self) -> list[str]:
-            exts = {".jpg", ".jpeg", ".png", ".bmp"}
-            if self._is_yolo_project and self._project_root:
-                if self._yolo_use_split_layout:
-                    split_dir = os.path.join(self._project_root, "images", self._current_split)
-                    os.makedirs(os.path.join(self._project_root, "labels", self._current_split), exist_ok=True)
-                    if not os.path.isdir(split_dir):
-                        return []
-                    return [str(p) for p in sorted(Path(split_dir).iterdir()) if p.is_file() and p.suffix.lower() in exts]
-                else:
-                    image_dir = os.path.join(self._project_root, "images")
-                    os.makedirs(os.path.join(self._project_root, "labels"), exist_ok=True)
-                    if not os.path.isdir(image_dir):
-                        return []
-                    return [str(p) for p in sorted(Path(image_dir).iterdir()) if p.is_file() and p.suffix.lower() in exts]
-            else:
-                if not self._project_dir or not os.path.isdir(self._project_dir):
-                    return []
-                return [str(p) for p in sorted(Path(self._project_dir).iterdir()) if p.is_file() and p.suffix.lower() in exts]
+            return label_project.scan_image_paths_for_current_source(self)
 
         def _refresh_combo_image_items(self) -> None:
-            self.combo_image.blockSignals(True)
-            self.combo_image.clear()
-            for p in self._image_paths:
-                base = os.path.basename(p)
-                display = self._compact_name(base)
-                self.combo_image.addItem(display, p)
-                try:
-                    self.combo_image.setItemData(self.combo_image.count() - 1, base, Qt.ItemDataRole.ToolTipRole)
-                except Exception:
-                    pass
-            self.combo_image.blockSignals(False)
+            label_project.refresh_combo_image_items(self, Qt=Qt)
 
         def _reload_images_for_current_source(self, reset_classes: bool = False) -> None:
-            self._image_paths = self._scan_image_paths_for_current_source()
-            self._refresh_combo_image_items()
-            if not self._image_paths:
-                QMessageBox.warning(self, "Label Workspace", "No images found in selected folder.")
-                self._image_idx = 0
-                self._labels_by_path = {}
-                self._refresh_info_labels()
-                return
-            if reset_classes:
-                self._class_names = ["class0"]
-            self._labels_by_path = {}
-            self._image_idx = 0
-            self._show_current_image()
+            label_project.reload_images_for_current_source(self, reset_classes=reset_classes, QMessageBox=QMessageBox, Qt=Qt)
 
         def _on_auto_refresh_toggled(self, checked: bool) -> None:
             self._auto_refresh_enabled = bool(checked)
 
         def _auto_refresh_tick(self) -> None:
-            if not self._auto_refresh_enabled:
-                return
-            if not self._project_dir and not self._project_root:
-                return
-            try:
-                new_paths = self._scan_image_paths_for_current_source()
-            except Exception:
-                return
-            if new_paths == self._image_paths:
-                return
-            current_path = ""
-            if self._image_paths and 0 <= self._image_idx < len(self._image_paths):
-                current_path = self._image_paths[self._image_idx]
-            self._sync_canvas_rects_to_current_image()
-            old_paths = set(self._image_paths)
-            self._image_paths = new_paths
-            self._refresh_combo_image_items()
-            self._labels_by_path = {k: v for k, v in self._labels_by_path.items() if k in set(new_paths)}
-            if not self._image_paths:
-                self._image_idx = 0
-                self.lbl_status.setText("No images found in selected folder.")
-                self._refresh_info_labels()
-                return
-            if current_path and current_path in self._image_paths:
-                self._image_idx = self._image_paths.index(current_path)
-            else:
-                self._image_idx = max(0, min(self._image_idx, len(self._image_paths) - 1))
-            added = len([p for p in self._image_paths if p not in old_paths])
-            if added > 0:
-                self.lbl_status.setText(f"Auto refresh: +{added} image(s)")
-            self._show_current_image()
+            label_project.auto_refresh_tick(self)
 
         def _on_split_changed(self, split: str) -> None:
-            split = str(split or "").strip().lower()
-            if not self._is_yolo_project:
-                return
-            if not self._yolo_use_split_layout:
-                return
-            if split not in {"train", "val", "test"}:
-                return
-            self._sync_canvas_rects_to_current_image()
-            self._current_split = split
-            self._reload_images_for_current_source(reset_classes=False)
-            self._save_progress_yaml()
+            label_project.on_split_changed(self, split)
 
         def _load_image(self, image_path: str) -> None:
             import cv2
@@ -4522,11 +4322,15 @@ def _build_main_window(startup_mode: str):
             if rects is None:
                 rects = self._load_label_file_for_image(image_path, w, h)
                 self._labels_by_path[image_path] = [list(r) for r in rects]
+            rects = label_tracking.ensure_track_overlay_rects(self, image_path, w, h)
             self._ensure_class_count_from_rects(rects)
             self._refresh_class_widgets()
             self.canvas.set_image(pix, w, h, rects)
+            label_tracking.auto_select_active_track_rect(self)
             self.canvas.set_default_class_id(self.class_combo.currentIndex())
             self.canvas.setFocus()
+            self._refresh_selected_detail()
+            self._update_video_tracking_controls()
 
         def _refresh_image_preview(self) -> None:
             self.canvas.update()
@@ -4621,6 +4425,9 @@ def _build_main_window(startup_mode: str):
             return f"{stem}.txt"
 
         def _load_label_file_for_image(self, image_path: str, img_w: int, img_h: int) -> list[list[float]]:
+            sidecar_rects = label_video_state.load_rects_from_sidecar(self, image_path)
+            if sidecar_rects is not None:
+                return [label_video_state.normalize_rect(r) for r in sidecar_rects]
             label_path = self._label_path_for_image(image_path)
             if not os.path.isfile(label_path):
                 return []
@@ -4665,7 +4472,7 @@ def _build_main_window(startup_mode: str):
                     x2 = (cx + w / 2) * img_w
                     y2 = (cy + h / 2) * img_h
                     angle = 0.0
-                rects.append([x1, y1, x2, y2, class_id, angle])
+                rects.append(label_video_state.normalize_rect([x1, y1, x2, y2, class_id, angle]))
             return rects
 
         def _rect_requires_obb(self, rect: list[float]) -> bool:
@@ -4707,6 +4514,8 @@ def _build_main_window(startup_mode: str):
             save_as_obb = str(mode or "detect").strip().lower() == "obb"
             lines: list[str] = []
             for rect in rects:
+                if not label_video_state.is_exportable_rect(rect):
+                    continue
                 x1, y1, x2, y2 = rect[:4]
                 class_id = int(rect[4]) if len(rect) >= 5 else 0
                 angle = float(rect[5]) if len(rect) >= 6 else 0.0
@@ -4740,7 +4549,7 @@ def _build_main_window(startup_mode: str):
             lines = self._serialize_rects_for_mode(rects, img_w, img_h, mode)
             with open(label_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines) + ("\n" if lines else ""))
-
+            label_video_state.save_rects_sidecar(self, image_path, rects)
         def _convert_dataset_labels_to_obb(self) -> None:
             if not self._image_paths:
                 return
@@ -4864,8 +4673,14 @@ def _build_main_window(startup_mode: str):
             cid = int(rect[4]) if len(rect) >= 5 else 0
             ang = float(rect[5]) if len(rect) >= 6 else 0.0
             cname = self._class_name_by_id(cid)
-            short_text = f"Selected: {idx+1} | {cname} ({cid}) | ({x1:.0f},{y1:.0f})-({x2:.0f},{y2:.0f}) | a={ang:.1f}"
-            full_text = f"Selected: {idx+1} | {cname} ({cid}) | xyxy=({x1:.1f},{y1:.1f},{x2:.1f},{y2:.1f}) | angle={ang:.1f}"
+            state_name = label_video_state.state_display_name(label_video_state.rect_state(rect))
+            track_id = label_video_state.rect_track_id(rect)
+            mode_name = "keyframe" if label_video_state.is_keyframe(rect) else ("auto" if label_video_state.is_generated(rect) else "box")
+            track_text = f"track #{track_id}" if track_id is not None else "untracked"
+            active_track_id = label_tracking.get_active_track_id(self)
+            active_text = "active" if active_track_id is not None and active_track_id == track_id else "inactive"
+            short_text = f"Selected: {idx+1} | {cname} ({cid}) | {track_text} | {state_name} | {mode_name} | {active_text}"
+            full_text = f"Selected: {idx+1} | {cname} ({cid}) | {track_text} | state={state_name} | mode={mode_name} | active={active_text} | xyxy=({x1:.1f},{y1:.1f},{x2:.1f},{y2:.1f}) | angle={ang:.1f}"
             self.lbl_selected_detail.setText(short_text)
             self.lbl_selected_detail.setToolTip(full_text)
 
@@ -5096,15 +4911,22 @@ def _build_main_window(startup_mode: str):
         def _on_canvas_selection_changed(self) -> None:
             idx = self.canvas.selected_idx
             if idx is None or not (0 <= idx < len(self.canvas.rects)):
+                if not self._track_video_enabled:
+                    self._active_track_id = None
                 self._refresh_selected_detail()
+                self._update_video_tracking_controls()
                 return
             try:
                 cid = int(self.canvas.rects[idx][4])
             except Exception:
                 cid = 0
+            track_id = label_video_state.rect_track_id(self.canvas.rects[idx])
+            if self._track_video_enabled and track_id is not None:
+                self._active_track_id = int(track_id)
             if 0 <= cid < self.class_combo.count():
                 self.class_combo.setCurrentIndex(cid)
             self._refresh_selected_detail()
+            self._update_video_tracking_controls()
 
         def _undo_canvas(self) -> None:
             self.canvas.undo()
@@ -5142,8 +4964,14 @@ def _build_main_window(startup_mode: str):
         def _iter_labeled_images(self) -> list[str]:
             images: list[str] = []
             for p in self._image_paths:
-                lp = self._label_path_for_image(p)
-                if os.path.isfile(lp):
+                rects = self._labels_by_path.get(p)
+                if rects is None:
+                    img_w, img_h = self._image_size_for_label_path(p)
+                    if img_w > 0 and img_h > 0:
+                        rects = self._load_label_file_for_image(p, img_w, img_h)
+                        self._labels_by_path[p] = [list(r) for r in rects]
+                exportable = any(label_video_state.is_exportable_rect(r) for r in (rects or []))
+                if exportable:
                     images.append(p)
             return images
 
@@ -5227,19 +5055,42 @@ def _build_main_window(startup_mode: str):
                     cv2_mod = None
             count = 0
             labeled_set = set(labeled_images)
+            track_manifest: dict[str, Any] = {"classes": list(self._class_names), "images": []}
             for i, img_path in enumerate(export_images):
                 name = os.path.basename(img_path)
                 stem = os.path.splitext(name)[0]
-                src_lbl = self._label_path_for_image(img_path)
                 dst_img = os.path.join(export_dir, "images", "train", name)
                 dst_lbl = os.path.join(export_dir, "labels", "train", f"{stem}.txt")
                 try:
                     shutil.copy2(img_path, dst_img)
-                    if img_path in labeled_set and os.path.isfile(src_lbl):
-                        shutil.copy2(src_lbl, dst_lbl)
-                    else:
-                        with open(dst_lbl, "w", encoding="utf-8") as f:
-                            f.write("")
+                    img_w, img_h = self._image_size_for_label_path(img_path)
+                    rects = self._labels_by_path.get(img_path)
+                    if rects is None and img_w > 0 and img_h > 0:
+                        rects = self._load_label_file_for_image(img_path, img_w, img_h)
+                        self._labels_by_path[img_path] = [list(r) for r in rects]
+                    rects = [list(r) for r in (rects or [])]
+                    lines = self._serialize_rects_for_mode(rects, img_w, img_h, self._label_format_mode) if img_w > 0 and img_h > 0 else []
+                    with open(dst_lbl, "w", encoding="utf-8") as f:
+                        f.write("\n".join(lines) + ("\n" if lines else ""))
+                    track_manifest["images"].append(
+                        {
+                            "file_name": name,
+                            "label_file": f"{stem}.txt",
+                            "annotations": [
+                                {
+                                    "class_id": int(r[4]) if len(r) >= 5 else 0,
+                                    "bbox_xyxy": [float(r[0]), float(r[1]), float(r[2]), float(r[3])],
+                                    "angle_deg": float(r[5]) if len(r) >= 6 else 0.0,
+                                    "track_id": label_video_state.rect_track_id(r),
+                                    "state": label_video_state.rect_state(r),
+                                    "keyframe": label_video_state.is_keyframe(r),
+                                    "generated": label_video_state.is_generated(r),
+                                }
+                                for r in rects
+                                if len(r) >= 4
+                            ],
+                        }
+                    )
                     count += 1
                 except Exception:
                     continue
@@ -5265,11 +5116,8 @@ def _build_main_window(startup_mode: str):
                             ok_val = False
                     if ok_val:
                         try:
-                            if img_path in labeled_set and os.path.isfile(src_lbl):
-                                shutil.copy2(src_lbl, dst_val_lbl)
-                            else:
-                                with open(dst_val_lbl, "w", encoding="utf-8") as f:
-                                    f.write("")
+                            with open(dst_val_lbl, "w", encoding="utf-8") as f:
+                                f.write("\n".join(lines) + ("\n" if lines else ""))
                             val_count += 1
                         except Exception:
                             pass
@@ -5289,12 +5137,18 @@ def _build_main_window(startup_mode: str):
             except Exception as exc:
                 QMessageBox.critical(self, "Export", f"Failed to write dataset.yaml:\n{exc}")
                 return
+            try:
+                with open(os.path.join(export_dir, "tracks.json"), "w", encoding="utf-8") as f:
+                    json.dump(track_manifest, f, ensure_ascii=False, indent=2)
+                    f.write("\n")
+            except Exception:
+                pass
             extra = f"\nVal (brightness aug): {val_count}" if make_aug_val else "\nVal: using train split"
             unlabeled_count = max(0, len(export_images) - len(labeled_images))
             QMessageBox.information(
                 self,
                 "Export",
-                f"Export done.\nTrain images: {count}\nLabeled: {len(labeled_images)}\nUnlabeled included: {unlabeled_count}{extra}\nFolder:\n{export_dir}",
+                f"Export done.\nTrain images: {count}\nLabeled: {len(labeled_images)}\nUnlabeled included: {unlabeled_count}{extra}\nTracks: tracks.json\nFolder:\n{export_dir}",
             )
 
         def _export_json_dataset(self) -> None:
