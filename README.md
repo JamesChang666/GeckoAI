@@ -50,6 +50,11 @@ geckoai-qt
 ## Desktop Features
 
 - Bounding-box annotation with drag, move, and resize handles
+- Label mode video workflow:
+  - `Load from Video` extracts a video into frame images and opens them directly in label mode
+  - File Info shows total video duration plus current frame progress
+  - A video timeline bar appears below the canvas and shows both frame and time progress
+  - Drag the timeline bar to jump to another extracted frame quickly
 - Rotated bounding boxes:
   - Drag rotate knob on selected box
   - 8 resize handles follow box rotation
@@ -69,9 +74,9 @@ geckoai-qt
   - Save rendered detect images into `detect_results_xxx/detected_images/`
 - Detect mode setup wizard:
   - Step 1: Choose model
-  - Step 2: Choose source (`Camera` or `Image Folder`)
+  - Step 2: Choose source (`Camera`, `Image Folder`, or `Video File`)
   - Camera path: pick camera (when multiple cameras are found), choose auto/manual FPS mode, set confidence threshold
-  - Image folder path: choose source folder, confidence threshold, run type, output folder, then start detect
+  - Image/video path: choose source folder or video file, confidence threshold, run type, output folder, then start detect
   - Class color mapping:
     - List model classes and assign per-class box colors
     - Double-click class row to set color quickly

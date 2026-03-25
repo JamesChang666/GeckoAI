@@ -651,12 +651,16 @@ def _build_main_window(startup_mode: str):
             pick_layout = QVBoxLayout(page_source_pick)
             self.btn_use_camera = QPushButton("Use Camera", page_source_pick)
             self.btn_choose_folder = QPushButton("Choose Image Folder", page_source_pick)
+            self.btn_choose_video = QPushButton("Choose Video File", page_source_pick)
             self.btn_use_camera.setMinimumHeight(44)
             self.btn_choose_folder.setMinimumHeight(44)
+            self.btn_choose_video.setMinimumHeight(44)
             self.btn_use_camera.clicked.connect(self._select_source_camera)
             self.btn_choose_folder.clicked.connect(self._select_source_folder)
+            self.btn_choose_video.clicked.connect(self._select_source_video)
             pick_layout.addWidget(self.btn_use_camera)
             pick_layout.addWidget(self.btn_choose_folder)
+            pick_layout.addWidget(self.btn_choose_video)
             pick_layout.addStretch(1)
             self._source_stack.addWidget(page_source_pick)
 
@@ -696,6 +700,23 @@ def _build_main_window(startup_mode: str):
             folder_layout.addWidget(self.btn_source_back_from_folder)
             folder_layout.addStretch(1)
             self._source_stack.addWidget(page_source_folder)
+
+            page_source_video = QWidget(page_source)
+            video_layout = QVBoxLayout(page_source_video)
+            self.video_path = PathPickerField(
+                "Select Video File",
+                "Select video file",
+                select_mode="file",
+                file_filter="Video files (*.mp4 *.avi *.mov *.mkv *.m4v *.wmv);;All files (*.*)",
+                parent=page_source_video,
+            )
+            video_layout.addWidget(QLabel("Video File", page_source_video))
+            video_layout.addWidget(self.video_path)
+            self.btn_source_back_from_video = QPushButton("Back: Choose Source", page_source_video)
+            self.btn_source_back_from_video.clicked.connect(self._back_to_source_choice)
+            video_layout.addWidget(self.btn_source_back_from_video)
+            video_layout.addStretch(1)
+            self._source_stack.addWidget(page_source_video)
 
             page_source_layout.addWidget(self._source_stack)
             page_source_layout.addStretch(1)
@@ -811,6 +832,10 @@ def _build_main_window(startup_mode: str):
             self._source_kind = "file"
             self._refresh_source_state()
 
+        def _select_source_video(self) -> None:
+            self._source_kind = "video"
+            self._refresh_source_state()
+
         def _back_to_source_choice(self) -> None:
             self._source_kind = ""
             self._refresh_source_state()
@@ -826,7 +851,7 @@ def _build_main_window(startup_mode: str):
                     return False
                 return True
             if idx == 1:
-                if self._source_kind not in {"camera", "file"}:
+                if self._source_kind not in {"camera", "file", "video"}:
                     QMessageBox.warning(self, "Detect Setup", "Please choose source type first.")
                     return False
                 if self._source_kind == "camera" and self.camera_index_combo.count() <= 0:
@@ -837,6 +862,12 @@ def _build_main_window(startup_mode: str):
                     return False
                 if self._source_kind == "file" and not os.path.isdir(self.folder_path.text().strip()):
                     QMessageBox.warning(self, "Detect Setup", "Image folder does not exist.")
+                    return False
+                if self._source_kind == "video" and not self.video_path.text().strip():
+                    QMessageBox.warning(self, "Detect Setup", "Video file is required for video source.")
+                    return False
+                if self._source_kind == "video" and not os.path.isfile(self.video_path.text().strip()):
+                    QMessageBox.warning(self, "Detect Setup", "Video file does not exist.")
                     return False
                 return True
             if idx == 2:
@@ -922,6 +953,10 @@ def _build_main_window(startup_mode: str):
                 "QPushButton{background:#0FA958;color:#FFFFFF;border:none;border-radius:6px;padding:10px 14px;font-size:14px;}"
                 "QPushButton:hover{background:#0C8A48;}"
             )
+            self.btn_choose_video.setStyleSheet(
+                "QPushButton{background:#147EFB;color:#FFFFFF;border:none;border-radius:6px;padding:10px 14px;font-size:14px;}"
+                "QPushButton:hover{background:#0F6DDC;}"
+            )
             green_picker_style = (
                 "QPushButton{background:#0FA958;color:#FFFFFF;border:none;border-radius:6px;padding:10px 14px;font-size:14px;}"
                 "QPushButton:hover{background:#0C8A48;}"
@@ -930,6 +965,8 @@ def _build_main_window(startup_mode: str):
                 self.model_path.btn_pick.setStyleSheet(green_picker_style)
             if hasattr(self, "folder_path") and self.folder_path is not None:
                 self.folder_path.btn_pick.setStyleSheet(green_picker_style)
+            if hasattr(self, "video_path") and self.video_path is not None:
+                self.video_path.btn_pick.setStyleSheet(green_picker_style)
             if hasattr(self, "output_dir") and self.output_dir is not None:
                 self.output_dir.btn_pick.setStyleSheet(green_picker_style)
             if hasattr(self, "golden_dir") and self.golden_dir is not None:
@@ -942,10 +979,16 @@ def _build_main_window(startup_mode: str):
                 "QPushButton{background:#F24822;color:#FFFFFF;border:none;border-radius:6px;padding:10px 14px;font-size:14px;}"
                 "QPushButton:hover{background:#D63F1D;}"
             )
+            self.btn_source_back_from_video.setStyleSheet(
+                "QPushButton{background:#F24822;color:#FFFFFF;border:none;border-radius:6px;padding:10px 14px;font-size:14px;}"
+                "QPushButton:hover{background:#D63F1D;}"
+            )
             if hasattr(self, "model_path") and self.model_path is not None:
                 self.model_path.lbl_path.setStyleSheet(f"color:{path_color};")
             if hasattr(self, "folder_path") and self.folder_path is not None:
                 self.folder_path.lbl_path.setStyleSheet(f"color:{path_color};")
+            if hasattr(self, "video_path") and self.video_path is not None:
+                self.video_path.lbl_path.setStyleSheet(f"color:{path_color};")
             if hasattr(self, "output_dir") and self.output_dir is not None:
                 self.output_dir.lbl_path.setStyleSheet(f"color:{path_color};")
             if hasattr(self, "golden_dir") and self.golden_dir is not None:
@@ -957,6 +1000,8 @@ def _build_main_window(startup_mode: str):
                 self._source_stack.setCurrentIndex(1)
             elif kind == "file":
                 self._source_stack.setCurrentIndex(2)
+            elif kind == "video":
+                self._source_stack.setCurrentIndex(3)
             else:
                 self._source_stack.setCurrentIndex(0)
 
@@ -1077,7 +1122,7 @@ def _build_main_window(startup_mode: str):
             if not os.path.isfile(self.model_path.text().strip()):
                 QMessageBox.warning(self, "Detect Setup", "Model file does not exist.")
                 return
-            if str(self._source_kind or "").strip().lower() not in {"camera", "file"}:
+            if str(self._source_kind or "").strip().lower() not in {"camera", "file", "video"}:
                 QMessageBox.warning(self, "Detect Setup", "Please choose source type first.")
                 return
             if str(self._source_kind).strip().lower() == "file" and not self.folder_path.text().strip():
@@ -1085,6 +1130,12 @@ def _build_main_window(startup_mode: str):
                 return
             if str(self._source_kind).strip().lower() == "file" and not os.path.isdir(self.folder_path.text().strip()):
                 QMessageBox.warning(self, "Detect Setup", "Image folder does not exist.")
+                return
+            if str(self._source_kind).strip().lower() == "video" and not self.video_path.text().strip():
+                QMessageBox.warning(self, "Detect Setup", "Video file is required for video source.")
+                return
+            if str(self._source_kind).strip().lower() == "video" and not os.path.isfile(self.video_path.text().strip()):
+                QMessageBox.warning(self, "Detect Setup", "Video file does not exist.")
                 return
             if not self.output_dir.text().strip():
                 QMessageBox.warning(self, "Detect Setup", "Output folder is required.")
@@ -1113,10 +1164,14 @@ def _build_main_window(startup_mode: str):
             self.accept()
 
         def payload(self) -> dict[str, Any]:
-            source_kind = "camera" if str(self._source_kind) == "camera" else "file"
+            source_kind = str(self._source_kind or "file").strip().lower()
+            if source_kind not in {"camera", "file", "video"}:
+                source_kind = "file"
             source_value: int | str
             if source_kind == "camera":
                 source_value = int(self._selected_camera_index())
+            elif source_kind == "video":
+                source_value = self.video_path.text().strip()
             else:
                 source_value = self.folder_path.text().strip()
             payload: dict[str, Any] = {
@@ -1444,7 +1499,7 @@ def _build_main_window(startup_mode: str):
             if self._detect_bg_cut_bundle is None:
                 return False
             source_kind = str(self.payload.get("source_kind", "file")).strip().lower()
-            return source_kind == "file"
+            return source_kind in {"file", "video"}
 
         def _build_cut_background_source_images(self, image_paths: list[str], cv2_module) -> list[str]:
             bundle = self._detect_bg_cut_bundle
@@ -1499,6 +1554,43 @@ def _build_main_window(startup_mode: str):
                 return []
             exts = {".jpg", ".jpeg", ".png", ".bmp"}
             return [str(p) for p in sorted(Path(src).iterdir()) if p.is_file() and p.suffix.lower() in exts]
+
+        def _extract_video_frames(self, video_path: str, cv2_module) -> list[str]:
+            video_abs = os.path.abspath(str(video_path).strip())
+            if not video_abs or not os.path.isfile(video_abs):
+                return []
+            run_root = os.path.dirname(self._saved_image_dir) if self._saved_image_dir else os.getcwd()
+            stem = Path(video_abs).stem or "video"
+            frames_dir = os.path.join(run_root, f"{stem}_frames")
+            os.makedirs(frames_dir, exist_ok=True)
+            cap = cv2_module.VideoCapture(video_abs)
+            if not cap.isOpened():
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+                return []
+            frame_paths: list[str] = []
+            frame_idx = 0
+            try:
+                while True:
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        break
+                    frame_idx += 1
+                    out_path = os.path.join(frames_dir, f"{stem}_frame_{frame_idx:06d}.jpg")
+                    try:
+                        saved = bool(cv2_module.imwrite(out_path, frame))
+                    except Exception:
+                        saved = False
+                    if saved:
+                        frame_paths.append(os.path.abspath(out_path))
+            finally:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+            return frame_paths
 
         def _auto_refresh_source_tick(self) -> None:
             if self._auto_batch_running:
@@ -1613,24 +1705,42 @@ def _build_main_window(startup_mode: str):
             self.btn_next.setText("Next (F)")
             self.btn_prev.setEnabled(True)
             self.btn_next.setEnabled(True)
-            source_images = self._scan_source_images()
-            self._known_source_images = set(os.path.abspath(p) for p in source_images)
+            if source_kind == "video":
+                source_images = self._extract_video_frames(src, cv2_module)
+                self._known_source_images = set(os.path.abspath(p) for p in source_images)
+                if source_images:
+                    self.lbl_status.setText(f"Video extracted: {len(source_images)} frame(s)")
+                else:
+                    QMessageBox.warning(self, "Detect Workspace", "No frames could be extracted from selected video.")
+                    self.close()
+                    return
+            else:
+                source_images = self._scan_source_images()
+                self._known_source_images = set(os.path.abspath(p) for p in source_images)
             if self._should_use_background_cut_detection():
                 cut_paths = self._build_cut_background_source_images(source_images, cv2_module)
                 if cut_paths:
                     self._image_paths = cut_paths
-                    self.lbl_status.setText(f"Background cut auto-applied: {len(cut_paths)} cut images")
+                    unit_label = "cut frames" if source_kind == "video" else "cut images"
+                    self.lbl_status.setText(f"Background cut auto-applied: {len(cut_paths)} {unit_label}")
                 else:
                     self._image_paths = source_images
-                    self.lbl_status.setText("Background cut bundle loaded, but no cut pieces found. Using original images.")
+                    fallback_label = "frames" if source_kind == "video" else "images"
+                    self.lbl_status.setText(f"Background cut bundle loaded, but no cut pieces found. Using original {fallback_label}.")
             else:
                 self._image_paths = source_images
             if not self._image_paths:
-                QMessageBox.warning(self, "Detect Workspace", "No images found in selected folder.")
+                if source_kind == "video":
+                    QMessageBox.warning(self, "Detect Workspace", "No usable frames found in selected video.")
+                else:
+                    QMessageBox.warning(self, "Detect Workspace", "No images found in selected folder.")
                 self.close()
                 return
             self._image_idx = 0
-            self._source_refresh_timer.start()
+            if source_kind == "file":
+                self._source_refresh_timer.start()
+            else:
+                self._source_refresh_timer.stop()
             self._render_current_image(cv2_module)
             QTimer.singleShot(0, self._refit_plot_after_layout)
             QTimer.singleShot(80, self._refit_plot_after_layout)
@@ -3121,6 +3231,11 @@ def _build_main_window(startup_mode: str):
             self._folder_refresh_timer.timeout.connect(self._auto_refresh_tick)
             self._folder_refresh_timer.start()
             self._progress_state: dict[str, str] = {}
+            self._video_label_source_name = ""
+            self._video_label_total_frames = 0
+            self._video_label_total_seconds = 0.0
+            self._video_label_fps = 0.0
+            self._video_timeline_user_dragging = False
             self._theme_mode = "dark"
             self._training_process: subprocess.Popen[str] | None = None
             self._training_stop_requested = False
@@ -3251,6 +3366,7 @@ def _build_main_window(startup_mode: str):
             self._toolbar.setStyleSheet(f"background:{c['bg_dark']};")
             self._title_label.setStyleSheet(f"color:{c['toolbar_text']};font-size:18px;font-weight:600;")
             self.canvas.setStyleSheet(f"background:{c['bg_canvas']};")
+            self._canvas_panel.setStyleSheet("background:transparent;")
             self._right_panel.setStyleSheet(f"background:{c['bg_light']};border-radius:8px;")
             self._right_scroll.setStyleSheet(f"QScrollArea{{background:{c['bg_light']};border:none;}}")
             self._right_scroll.verticalScrollBar().setStyleSheet(
@@ -3270,6 +3386,7 @@ def _build_main_window(startup_mode: str):
                 self.btn_back,
                 self.btn_open,
                 self.btn_open_camera,
+                self.btn_open_video,
                 self.btn_save,
                 self.btn_export,
                 self.btn_golden,
@@ -3289,6 +3406,10 @@ def _build_main_window(startup_mode: str):
             self.btn_open_camera.setStyleSheet(
                 f"QPushButton{{background:{c['success']};color:{c['text_white']};border:none;border-radius:6px;padding:6px 10px;}}"
                 "QPushButton:hover{background:#0C8A48;}"
+            )
+            self.btn_open_video.setStyleSheet(
+                "QPushButton{background:#147EFB;color:#FFFFFF;border:none;border-radius:6px;padding:6px 10px;}"
+                "QPushButton:hover{background:#0F6DDC;}"
             )
             self.btn_save.setStyleSheet(
                 f"QPushButton{{background:{c['success']};color:{c['text_white']};border:none;border-radius:6px;padding:6px 10px;}}"
@@ -3359,6 +3480,19 @@ def _build_main_window(startup_mode: str):
                 + combo_popup_style_panel
             )
             self.lbl_progress.setStyleSheet(f"color:{c['text_secondary']};")
+            self.lbl_video_progress.setStyleSheet(f"color:{c['text_secondary']};")
+            self.video_timeline_wrap.setStyleSheet(
+                f"background:{c['bg_white']};border:1px solid {c['border']};border-radius:8px;"
+            )
+            self.video_timeline_slider.setStyleSheet(
+                "QSlider::groove:horizontal{height:8px;border-radius:4px;background:#D7D9E0;}"
+                f"QSlider::sub-page:horizontal{{height:8px;border-radius:4px;background:{c['primary']};}}"
+                "QSlider::add-page:horizontal{height:8px;border-radius:4px;background:#D7D9E0;}"
+                f"QSlider::handle:horizontal{{width:16px;margin:-5px 0;border-radius:8px;background:{c['success']};border:2px solid #FFFFFF;}}"
+            )
+            self.lbl_video_timeline_current.setStyleSheet(f"color:{c['text_secondary']};")
+            self.lbl_video_timeline_total.setStyleSheet(f"color:{c['text_secondary']};")
+            self.lbl_video_timeline_summary.setStyleSheet(f"color:{c['text_secondary']};")
             self.lbl_box_count.setStyleSheet(f"color:{c['primary']};")
             self.lbl_class_count.setStyleSheet(f"color:{c['primary']};")
             self.btn_remove.setStyleSheet(
@@ -3479,6 +3613,7 @@ def _build_main_window(startup_mode: str):
             self.btn_back = QPushButton("Back", toolbar)
             self.btn_open = QPushButton("Load Project", toolbar)
             self.btn_open_camera = QPushButton("Load from Camera", toolbar)
+            self.btn_open_video = QPushButton("Load from Video", toolbar)
             self.combo_split = QComboBox(toolbar)
             self.combo_split.addItems(["train", "val", "test"])
             self.combo_split.currentTextChanged.connect(self._on_split_changed)
@@ -3511,6 +3646,7 @@ def _build_main_window(startup_mode: str):
             self.btn_back.clicked.connect(self.close)
             self.btn_open.clicked.connect(self._open_folder)
             self.btn_open_camera.clicked.connect(self._open_from_camera_capture)
+            self.btn_open_video.clicked.connect(self._open_from_video)
             self.btn_save.clicked.connect(self._save_current_label)
             self.btn_export.clicked.connect(self._export_with_picker)
             self.btn_golden.clicked.connect(self._export_golden_current)
@@ -3522,6 +3658,7 @@ def _build_main_window(startup_mode: str):
             top.addWidget(self.btn_back)
             top.addWidget(self.btn_open)
             top.addWidget(self.btn_open_camera)
+            top.addWidget(self.btn_open_video)
             top.addWidget(self.combo_split)
             top.addWidget(self.btn_save)
             top.addWidget(self.btn_undo)
@@ -3550,6 +3687,39 @@ def _build_main_window(startup_mode: str):
             self.canvas.resolve_class_name = self._class_name_by_id
             self.canvas.resolve_class_color = self._label_class_color_rgb
             self.canvas.on_paste_prev_box = self._paste_prev_label_at
+
+            canvas_panel = QWidget(root)
+            self._canvas_panel = canvas_panel
+            canvas_layout = QVBoxLayout(canvas_panel)
+            canvas_layout.setContentsMargins(0, 0, 0, 0)
+            canvas_layout.setSpacing(8)
+            canvas_layout.addWidget(self.canvas, 1)
+            self.video_timeline_wrap = QWidget(canvas_panel)
+            timeline_layout = QVBoxLayout(self.video_timeline_wrap)
+            timeline_layout.setContentsMargins(12, 10, 12, 10)
+            timeline_layout.setSpacing(6)
+            self.lbl_video_timeline_summary = QLabel("", self.video_timeline_wrap)
+            self.lbl_video_timeline_summary.setWordWrap(True)
+            timeline_layout.addWidget(self.lbl_video_timeline_summary)
+            self.video_timeline_slider = QSlider(Qt.Orientation.Horizontal, self.video_timeline_wrap)
+            self.video_timeline_slider.setMinimum(1)
+            self.video_timeline_slider.setMaximum(1)
+            self.video_timeline_slider.setValue(1)
+            self.video_timeline_slider.setSingleStep(1)
+            self.video_timeline_slider.setPageStep(1)
+            self.video_timeline_slider.sliderPressed.connect(lambda: setattr(self, "_video_timeline_user_dragging", True))
+            self.video_timeline_slider.sliderReleased.connect(self._on_video_timeline_released)
+            self.video_timeline_slider.valueChanged.connect(self._on_video_timeline_changed)
+            timeline_layout.addWidget(self.video_timeline_slider)
+            timeline_info_row = QHBoxLayout()
+            self.lbl_video_timeline_current = QLabel("00:00", self.video_timeline_wrap)
+            self.lbl_video_timeline_total = QLabel("00:00", self.video_timeline_wrap)
+            timeline_info_row.addWidget(self.lbl_video_timeline_current)
+            timeline_info_row.addStretch(1)
+            timeline_info_row.addWidget(self.lbl_video_timeline_total)
+            timeline_layout.addLayout(timeline_info_row)
+            self.video_timeline_wrap.hide()
+            canvas_layout.addWidget(self.video_timeline_wrap, 0)
 
             right = QWidget(root)
             self._right_panel = right
@@ -3618,6 +3788,10 @@ def _build_main_window(startup_mode: str):
             row_counts.addStretch(1)
             row_counts.addWidget(self.lbl_box_count)
             info_layout.addLayout(row_counts)
+            self.lbl_video_progress = QLabel("", info_box)
+            self.lbl_video_progress.setWordWrap(True)
+            self.lbl_video_progress.hide()
+            info_layout.addWidget(self.lbl_video_progress)
             self.chk_auto_refresh_folder = QCheckBox("Auto Refresh Folder", info_box)
             self.chk_auto_refresh_folder.setChecked(True)
             self.chk_auto_refresh_folder.toggled.connect(self._on_auto_refresh_toggled)
@@ -3722,7 +3896,7 @@ def _build_main_window(startup_mode: str):
             nav_lay.addWidget(self.btn_prev, 1)
             nav_lay.addWidget(self.btn_next, 1)
             right_layout.addWidget(nav, 0)
-            body.addWidget(self.canvas, 1)
+            body.addWidget(self._canvas_panel, 1)
             body.addWidget(right, 0)
             layout.addLayout(body, 1)
             self.setCentralWidget(root)
@@ -3783,44 +3957,271 @@ def _build_main_window(startup_mode: str):
             self._restore_progress_position()
             self._save_progress_yaml()
 
+        def _clear_video_label_meta(self) -> None:
+            self._video_label_source_name = ""
+            self._video_label_total_frames = 0
+            self._video_label_total_seconds = 0.0
+            self._video_label_fps = 0.0
+            self._video_timeline_user_dragging = False
+            self._update_video_timeline_ui()
+
+        def _set_video_label_meta(self, source_name: str, total_frames: int, total_seconds: float, fps: float) -> None:
+            self._video_label_source_name = str(source_name or "").strip()
+            self._video_label_total_frames = max(0, int(total_frames or 0))
+            self._video_label_total_seconds = max(0.0, float(total_seconds or 0.0))
+            self._video_label_fps = max(0.0, float(fps or 0.0))
+            self._video_timeline_user_dragging = False
+            self._update_video_timeline_ui()
+
+        def _format_video_time(self, seconds: float) -> str:
+            total_seconds = max(0, int(round(float(seconds or 0.0))))
+            hours, rem = divmod(total_seconds, 3600)
+            minutes, secs = divmod(rem, 60)
+            if hours > 0:
+                return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+            return f"{minutes:02d}:{secs:02d}"
+
+        def _update_video_timeline_ui(self) -> None:
+            if self._video_label_total_frames <= 0:
+                self.video_timeline_slider.blockSignals(True)
+                self.video_timeline_slider.setMinimum(1)
+                self.video_timeline_slider.setMaximum(1)
+                self.video_timeline_slider.setValue(1)
+                self.video_timeline_slider.blockSignals(False)
+                self.lbl_video_timeline_summary.clear()
+                self.lbl_video_timeline_current.setText("00:00")
+                self.lbl_video_timeline_total.setText("00:00")
+                self.video_timeline_wrap.hide()
+                return
+            total_frames = max(1, int(self._video_label_total_frames))
+            current_frame = min(max(1, self._image_idx + 1), total_frames)
+            current_seconds = (float(current_frame) / float(self._video_label_fps)) if self._video_label_fps > 0 else 0.0
+            total_seconds = float(self._video_label_total_seconds or 0.0)
+            self.video_timeline_slider.blockSignals(True)
+            self.video_timeline_slider.setMinimum(1)
+            self.video_timeline_slider.setMaximum(total_frames)
+            self.video_timeline_slider.setPageStep(max(1, total_frames // 20))
+            self.video_timeline_slider.setValue(current_frame)
+            self.video_timeline_slider.blockSignals(False)
+            self.lbl_video_timeline_summary.setText(
+                f"Frame {current_frame} / {total_frames} | "
+                f"{self._format_video_time(current_seconds)} / {self._format_video_time(total_seconds)}"
+            )
+            self.lbl_video_timeline_current.setText(self._format_video_time(current_seconds))
+            self.lbl_video_timeline_total.setText(self._format_video_time(total_seconds))
+            self.video_timeline_wrap.show()
+
+        def _on_video_timeline_changed(self, value: int) -> None:
+            if self._video_label_total_frames <= 0:
+                return
+            if getattr(self, "_video_timeline_user_dragging", False):
+                current_seconds = (float(value) / float(self._video_label_fps)) if self._video_label_fps > 0 else 0.0
+                self.lbl_video_timeline_summary.setText(
+                    f"Frame {int(value)} / {int(self._video_label_total_frames)} | "
+                    f"{self._format_video_time(current_seconds)} / {self._format_video_time(self._video_label_total_seconds)}"
+                )
+                self.lbl_video_timeline_current.setText(self._format_video_time(current_seconds))
+
+        def _on_video_timeline_released(self) -> None:
+            self._video_timeline_user_dragging = False
+            if self._video_label_total_frames <= 0:
+                return
+            target_idx = int(self.video_timeline_slider.value()) - 1
+            if target_idx < 0 or target_idx >= len(self._image_paths):
+                self._update_video_timeline_ui()
+                return
+            if target_idx == self._image_idx:
+                self._update_video_timeline_ui()
+                return
+            self._image_idx = target_idx
+            self._show_current_image()
+
+        def _iter_label_images_recursive(self, root_dir: str) -> list[str]:
+            exts = {".jpg", ".jpeg", ".png", ".bmp"}
+            out: list[str] = []
+            for base, _dirs, files in os.walk(root_dir):
+                for name in files:
+                    p = os.path.join(base, name)
+                    if os.path.splitext(name)[1].lower() in exts and os.path.isfile(p):
+                        out.append(os.path.abspath(p))
+            out.sort()
+            return out
+
+        def _prepare_cut_output_for_label(self, cut_output_dir: str) -> str | None:
+            src_images = self._iter_label_images_recursive(cut_output_dir)
+            if not src_images:
+                return None
+            ready_dir = os.path.join(cut_output_dir, "label_ready_images")
+            os.makedirs(ready_dir, exist_ok=True)
+            copied = 0
+            for src in src_images:
+                name = os.path.basename(src)
+                stem, ext = os.path.splitext(name)
+                rel_parent = os.path.basename(os.path.dirname(src))
+                base_stem = f"{rel_parent}_{stem}".replace(" ", "_")
+                dst = os.path.join(ready_dir, f"{base_stem}{ext}")
+                i = 1
+                while os.path.exists(dst):
+                    dst = os.path.join(ready_dir, f"{base_stem}_{i}{ext}")
+                    i += 1
+                try:
+                    shutil.copy2(src, dst)
+                    copied += 1
+                except Exception:
+                    continue
+            if copied <= 0:
+                return None
+            return ready_dir
+
+        def _maybe_run_cut_background_for_label(self, path: str, kind: str) -> tuple[str, str] | None:
+            if kind != "image_folder":
+                return os.path.abspath(path), kind
+            ask_cut = QMessageBox.question(
+                self,
+                "Cut Background",
+                "Run cut background before labeling?\n(After cut, label will open on cut results directly.)",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if ask_cut != QMessageBox.StandardButton.Yes:
+                return os.path.abspath(path), kind
+            try:
+                import cv2  # type: ignore
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "Cut Background",
+                    "Cut background requires full desktop OpenCV.\n"
+                    f"OpenCV import failed: {exc}\n\n"
+                    "Fix:\n"
+                    "pip uninstall opencv-python-headless\n"
+                    "pip install opencv-python",
+                )
+                return None
+            missing = [name for name in ["imread", "namedWindow", "selectROI", "destroyWindow"] if not hasattr(cv2, name)]
+            if missing:
+                QMessageBox.critical(
+                    self,
+                    "Cut Background",
+                    "Cut background requires full desktop OpenCV.\n"
+                    f"OpenCV missing APIs: {', '.join(missing)}\n\n"
+                    "Fix:\n"
+                    "pip uninstall opencv-python-headless\n"
+                    "pip install opencv-python",
+                )
+                return None
+            golden_image_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select one golden image in this folder",
+                os.path.abspath(path),
+                "Image files (*.png *.jpg *.jpeg *.bmp)",
+            )
+            if not golden_image_path:
+                return None
+            try:
+                if os.path.commonpath([os.path.abspath(path), os.path.abspath(golden_image_path)]) != os.path.abspath(path):
+                    QMessageBox.warning(self, "Cut Background", "Please select a golden image inside the selected folder.")
+                    return None
+            except Exception:
+                pass
+            threshold = _prompt_cut_background_threshold(self, 0.3)
+            if threshold is None:
+                return None
+            try:
+                result = cut_background_detect.run_cut_background_batch_with_golden(
+                    path,
+                    golden_image_path=golden_image_path,
+                    threshold=threshold,
+                    parent=self,
+                )
+            except Exception as exc:
+                msg = str(exc)
+                if "cvNamedWindow" in msg or "The function is not implemented" in msg:
+                    QMessageBox.critical(
+                        self,
+                        "Cut Background",
+                        "Cut background requires OpenCV GUI backend.\n"
+                        "Please install desktop OpenCV:\n"
+                        "pip uninstall opencv-python-headless\n"
+                        "pip install opencv-python",
+                    )
+                    return None
+                QMessageBox.critical(self, "Cut Background", f"Cut background failed:\n{exc}")
+                return None
+            if result is None:
+                return None
+            ready = self._prepare_cut_output_for_label(result.output_dir)
+            if not ready or not os.path.isdir(ready):
+                QMessageBox.warning(
+                    self,
+                    "Cut Background",
+                    "Cut background finished but no label-ready images were produced.",
+                )
+                return None
+            return os.path.abspath(ready), "image_folder"
+
+        def _extract_video_frames_for_label(self, video_path: str, output_root: str) -> tuple[str, int, float, float] | None:
+            try:
+                import cv2  # type: ignore
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "Load from Video",
+                    "Video frame extraction requires OpenCV.\n"
+                    f"OpenCV import failed: {exc}",
+                )
+                return None
+            video_abs = os.path.abspath(video_path)
+            if not os.path.isfile(video_abs):
+                QMessageBox.warning(self, "Load from Video", "Video file does not exist.")
+                return None
+            stem = Path(video_abs).stem or "video"
+            frame_dir = os.path.join(
+                os.path.abspath(output_root),
+                f"{stem}_label_frames_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            )
+            os.makedirs(frame_dir, exist_ok=True)
+            cap = cv2.VideoCapture(video_abs)
+            if not cap.isOpened():
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+                QMessageBox.warning(self, "Load from Video", "Failed to open selected video.")
+                return None
+            fps = 0.0
+            total_frame_count = 0
+            try:
+                fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+            except Exception:
+                fps = 0.0
+            try:
+                total_frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            except Exception:
+                total_frame_count = 0
+            saved_count = 0
+            try:
+                while True:
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        break
+                    saved_count += 1
+                    out_path = os.path.join(frame_dir, f"{stem}_frame_{saved_count:06d}.jpg")
+                    if not cv2.imwrite(out_path, frame):
+                        saved_count -= 1
+            finally:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+            if saved_count <= 0:
+                QMessageBox.warning(self, "Load from Video", "No frames could be extracted from selected video.")
+                return None
+            effective_total_frames = saved_count if saved_count > 0 else max(0, total_frame_count)
+            total_seconds = (float(effective_total_frames) / float(fps)) if fps > 0 else 0.0
+            return os.path.abspath(frame_dir), effective_total_frames, total_seconds, fps
+
         def _open_from_camera_capture(self) -> None:
-            def _iter_images_recursive(root_dir: str) -> list[str]:
-                exts = {".jpg", ".jpeg", ".png", ".bmp"}
-                out: list[str] = []
-                for base, _dirs, files in os.walk(root_dir):
-                    for name in files:
-                        p = os.path.join(base, name)
-                        if os.path.splitext(name)[1].lower() in exts and os.path.isfile(p):
-                            out.append(os.path.abspath(p))
-                out.sort()
-                return out
-
-            def _prepare_cut_output_for_label(cut_output_dir: str) -> str | None:
-                src_images = _iter_images_recursive(cut_output_dir)
-                if not src_images:
-                    return None
-                ready_dir = os.path.join(cut_output_dir, "label_ready_images")
-                os.makedirs(ready_dir, exist_ok=True)
-                copied = 0
-                for src in src_images:
-                    name = os.path.basename(src)
-                    stem, ext = os.path.splitext(name)
-                    rel_parent = os.path.basename(os.path.dirname(src))
-                    base_stem = f"{rel_parent}_{stem}".replace(" ", "_")
-                    dst = os.path.join(ready_dir, f"{base_stem}{ext}")
-                    i = 1
-                    while os.path.exists(dst):
-                        dst = os.path.join(ready_dir, f"{base_stem}_{i}{ext}")
-                        i += 1
-                    try:
-                        shutil.copy2(src, dst)
-                        copied += 1
-                    except Exception:
-                        continue
-                if copied <= 0:
-                    return None
-                return ready_dir
-
+            self._clear_video_label_meta()
             default_dir = os.path.abspath(self._project_dir or self._project_root or os.getcwd())
             save_dir = QFileDialog.getExistingDirectory(
                 self,
@@ -3862,267 +4263,55 @@ def _build_main_window(startup_mode: str):
                 return
             path = os.path.abspath(capture_dir)
             kind = "image_folder"
-            ask_cut = QMessageBox.question(
+            prepared = self._maybe_run_cut_background_for_label(path, kind)
+            if prepared is None:
+                return
+            path, kind = prepared
+            self._load_label_project(path, kind)
+
+        def _open_from_video(self) -> None:
+            default_dir = os.path.abspath(self._project_dir or self._project_root or os.getcwd())
+            video_path, _ = QFileDialog.getOpenFileName(
                 self,
-                "Cut Background",
-                "Run cut background before labeling?\n(After cut, label will open on cut results directly.)",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                "Select Video File",
+                default_dir,
+                "Video files (*.mp4 *.avi *.mov *.mkv *.m4v *.wmv);;All files (*.*)",
             )
-            if ask_cut == QMessageBox.StandardButton.Yes:
-                try:
-                    import cv2  # type: ignore
-                except Exception as exc:
-                    QMessageBox.critical(
-                        self,
-                        "Cut Background",
-                        "Cut background requires full desktop OpenCV.\n"
-                        f"OpenCV import failed: {exc}\n\n"
-                        "Fix:\n"
-                        "pip uninstall opencv-python-headless\n"
-                        "pip install opencv-python",
-                    )
-                    return
-                missing = [name for name in ["imread", "namedWindow", "selectROI", "destroyWindow"] if not hasattr(cv2, name)]
-                if missing:
-                    QMessageBox.critical(
-                        self,
-                        "Cut Background",
-                        "Cut background requires full desktop OpenCV.\n"
-                        f"OpenCV missing APIs: {', '.join(missing)}\n\n"
-                        "Fix:\n"
-                        "pip uninstall opencv-python-headless\n"
-                        "pip install opencv-python",
-                    )
-                    return
-                golden_image_path, _ = QFileDialog.getOpenFileName(
-                    self,
-                    "Select one golden image in this folder",
-                    path,
-                    "Image files (*.png *.jpg *.jpeg *.bmp)",
-                )
-                if not golden_image_path:
-                    return
-                try:
-                    if os.path.commonpath([path, os.path.abspath(golden_image_path)]) != path:
-                        QMessageBox.warning(self, "Cut Background", "Please select a golden image inside the selected folder.")
-                        return
-                except Exception:
-                    pass
-                threshold = _prompt_cut_background_threshold(self, 0.3)
-                if threshold is None:
-                    return
-                try:
-                    result = cut_background_detect.run_cut_background_batch_with_golden(
-                        path,
-                        golden_image_path=golden_image_path,
-                        threshold=threshold,
-                        parent=self,
-                    )
-                except Exception as exc:
-                    msg = str(exc)
-                    if "cvNamedWindow" in msg or "The function is not implemented" in msg:
-                        QMessageBox.critical(
-                            self,
-                            "Cut Background",
-                            "Cut background requires OpenCV GUI backend.\n"
-                            "Please install desktop OpenCV:\n"
-                            "pip uninstall opencv-python-headless\n"
-                            "pip install opencv-python",
-                        )
-                        return
-                    QMessageBox.critical(self, "Cut Background", f"Cut background failed:\n{exc}")
-                    return
-                if result is None:
-                    return
-                ready = _prepare_cut_output_for_label(result.output_dir)
-                if not ready or not os.path.isdir(ready):
-                    QMessageBox.warning(
-                        self,
-                        "Cut Background",
-                        "Cut background finished but no label-ready images were produced.",
-                    )
-                    return
-                path = os.path.abspath(ready)
-                kind = "image_folder"
+            if not video_path:
+                return
+            save_dir = QFileDialog.getExistingDirectory(
+                self,
+                "Select parent folder for extracted video frames",
+                default_dir,
+            )
+            if not save_dir:
+                return
+            extracted = self._extract_video_frames_for_label(video_path, save_dir)
+            if not extracted:
+                return
+            frame_dir, total_frames, total_seconds, fps = extracted
+            path = os.path.abspath(frame_dir)
+            kind = "image_folder"
+            prepared = self._maybe_run_cut_background_for_label(path, kind)
+            if prepared is None:
+                return
+            path, kind = prepared
+            self._set_video_label_meta(os.path.basename(video_path), total_frames, total_seconds, fps)
             self._load_label_project(path, kind)
 
         def _open_folder(self) -> None:
-            def _iter_images_recursive(root_dir: str) -> list[str]:
-                exts = {".jpg", ".jpeg", ".png", ".bmp"}
-                out: list[str] = []
-                for base, _dirs, files in os.walk(root_dir):
-                    for name in files:
-                        p = os.path.join(base, name)
-                        if os.path.splitext(name)[1].lower() in exts and os.path.isfile(p):
-                            out.append(os.path.abspath(p))
-                out.sort()
-                return out
-
-            def _prepare_cut_output_for_label(cut_output_dir: str) -> str | None:
-                src_images = _iter_images_recursive(cut_output_dir)
-                if not src_images:
-                    return None
-                ready_dir = os.path.join(cut_output_dir, "label_ready_images")
-                os.makedirs(ready_dir, exist_ok=True)
-                copied = 0
-                for src in src_images:
-                    name = os.path.basename(src)
-                    stem, ext = os.path.splitext(name)
-                    rel_parent = os.path.basename(os.path.dirname(src))
-                    base_stem = f"{rel_parent}_{stem}".replace(" ", "_")
-                    dst = os.path.join(ready_dir, f"{base_stem}{ext}")
-                    i = 1
-                    while os.path.exists(dst):
-                        dst = os.path.join(ready_dir, f"{base_stem}_{i}{ext}")
-                        i += 1
-                    try:
-                        shutil.copy2(src, dst)
-                        copied += 1
-                    except Exception:
-                        continue
-                if copied <= 0:
-                    return None
-                return ready_dir
-
+            self._clear_video_label_meta()
             dialog = LoadProjectDialog(self)
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
             payload = dialog.payload()
             path = payload["path"]
             kind = payload["kind"]
-            if kind == "image_folder":
-                ask_cut = QMessageBox.question(
-                    self,
-                    "Cut Background",
-                    "Run cut background before labeling?\n(After cut, label will open on cut results directly.)",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                )
-                if ask_cut == QMessageBox.StandardButton.Yes:
-                    try:
-                        import cv2  # type: ignore
-                    except Exception as exc:
-                        QMessageBox.critical(
-                            self,
-                            "Cut Background",
-                            "Cut background requires full desktop OpenCV.\n"
-                            f"OpenCV import failed: {exc}\n\n"
-                            "Fix:\n"
-                            "pip uninstall opencv-python-headless\n"
-                            "pip install opencv-python",
-                        )
-                        return
-                    missing = [name for name in ["imread", "namedWindow", "selectROI", "destroyWindow"] if not hasattr(cv2, name)]
-                    if missing:
-                        QMessageBox.critical(
-                            self,
-                            "Cut Background",
-                            "Cut background requires full desktop OpenCV.\n"
-                            f"OpenCV missing APIs: {', '.join(missing)}\n\n"
-                            "Fix:\n"
-                            "pip uninstall opencv-python-headless\n"
-                            "pip install opencv-python",
-                        )
-                        return
-                    golden_image_path, _ = QFileDialog.getOpenFileName(
-                        self,
-                        "Select one golden image in this folder",
-                        os.path.abspath(path),
-                        "Image files (*.png *.jpg *.jpeg *.bmp)",
-                    )
-                    if not golden_image_path:
-                        return
-                    try:
-                        if os.path.commonpath([os.path.abspath(path), os.path.abspath(golden_image_path)]) != os.path.abspath(path):
-                            QMessageBox.warning(self, "Cut Background", "Please select a golden image inside the selected folder.")
-                            return
-                    except Exception:
-                        pass
-                    threshold = _prompt_cut_background_threshold(self, 0.3)
-                    if threshold is None:
-                        return
-                    try:
-                        result = cut_background_detect.run_cut_background_batch_with_golden(
-                            path,
-                            golden_image_path=golden_image_path,
-                            threshold=threshold,
-                            parent=self,
-                        )
-                    except Exception as exc:
-                        msg = str(exc)
-                        if "cvNamedWindow" in msg or "The function is not implemented" in msg:
-                            QMessageBox.critical(
-                                self,
-                                "Cut Background",
-                                "Cut background requires OpenCV GUI backend.\n"
-                                "Please install desktop OpenCV:\n"
-                                "pip uninstall opencv-python-headless\n"
-                                "pip install opencv-python",
-                            )
-                            return
-                        QMessageBox.critical(self, "Cut Background", f"Cut background failed:\n{exc}")
-                        return
-                    if result is None:
-                        return
-                    ready = _prepare_cut_output_for_label(result.output_dir)
-                    if not ready or not os.path.isdir(ready):
-                        QMessageBox.warning(
-                            self,
-                            "Cut Background",
-                            "Cut background finished but no label-ready images were produced.",
-                        )
-                        return
-                    path = ready
-                    kind = "image_folder"
-            self._project_dir = os.path.abspath(path)
-            self._progress_state = self._read_progress_yaml(self._project_dir)
-            images_root = os.path.join(path, "images")
-            labels_root = os.path.join(path, "labels")
-            has_split = any(os.path.isdir(os.path.join(images_root, s)) for s in ("train", "val", "test"))
-            has_flat = os.path.isdir(images_root) and os.path.isdir(labels_root)
-            if kind == "yolo_dataset":
-                self._is_yolo_project = bool(has_split or has_flat)
-                if not self._is_yolo_project:
-                    QMessageBox.warning(
-                        self,
-                        "Load Project",
-                        "Selected folder is not a YOLO dataset root.\nExpected images/ and labels/ (with or without train|val|test splits).",
-                    )
-                    return
-            else:
-                self._is_yolo_project = bool(has_split or has_flat)
-            self._yolo_use_split_layout = bool(self._is_yolo_project and has_split)
-            if self._is_yolo_project:
-                self._project_root = path
-                available = [s for s in ("train", "val", "test") if os.path.isdir(os.path.join(images_root, s))]
-                self._load_class_names_from_dataset_yaml()
-                progress_split = str(self._progress_state.get("split", "")).strip().lower()
-                if progress_split in {"train", "val", "test"} and progress_split in available:
-                    self._current_split = progress_split
-                progress_class_names = self._extract_class_names_from_progress(self._progress_state)
-                if progress_class_names:
-                    self._class_names = progress_class_names
-                self.combo_split.setEnabled(self._yolo_use_split_layout)
-                self.combo_split.blockSignals(True)
-                self.combo_split.clear()
-                split_items = available if self._yolo_use_split_layout else ["all"]
-                self.combo_split.addItems(split_items)
-                if self._current_split not in split_items:
-                    self._current_split = "train" if self._yolo_use_split_layout and "train" in available else split_items[0]
-                self.combo_split.setCurrentText(self._current_split)
-                self.combo_split.blockSignals(False)
-                self._reload_images_for_current_source(reset_classes=False)
-                self._restore_progress_position()
-                self._save_progress_yaml()
+            prepared = self._maybe_run_cut_background_for_label(path, kind)
+            if prepared is None:
                 return
-            self._project_root = ""
-            self._class_names = ["class0"]
-            progress_class_names = self._extract_class_names_from_progress(self._progress_state)
-            if progress_class_names:
-                self._class_names = progress_class_names
-            self.combo_split.setEnabled(False)
-            self._reload_images_for_current_source(reset_classes=False)
-            self._restore_progress_position()
-            self._save_progress_yaml()
+            path, kind = prepared
+            self._load_label_project(path, kind)
 
         def _progress_yaml_path(self) -> str:
             base = self._project_root if self._is_yolo_project and self._project_root else self._project_dir
@@ -4388,6 +4577,25 @@ def _build_main_window(startup_mode: str):
             self.lbl_progress.setText(f"{idx} / {total}")
             if self._is_yolo_project:
                 self.lbl_progress.setText(f"{self._current_split}: {idx} / {total}")
+            if self._video_label_total_frames > 0:
+                current_frame = min(max(0, idx), self._video_label_total_frames)
+                current_seconds = (float(current_frame) / float(self._video_label_fps)) if self._video_label_fps > 0 else 0.0
+                source_name = self._compact_name(self._video_label_source_name, head=18, tail=12) if self._video_label_source_name else "video"
+                self.lbl_video_progress.setText(
+                    f"Video: {source_name} | Total {self._format_video_time(self._video_label_total_seconds)} | "
+                    f"Frame {current_frame} / {self._video_label_total_frames} ({self._format_video_time(current_seconds)})"
+                )
+                self.lbl_video_progress.setToolTip(
+                    f"{self._video_label_source_name or 'video'} | "
+                    f"total {self._format_video_time(self._video_label_total_seconds)} | "
+                    f"frame {current_frame}/{self._video_label_total_frames}"
+                )
+                self.lbl_video_progress.show()
+            else:
+                self.lbl_video_progress.clear()
+                self.lbl_video_progress.setToolTip("")
+                self.lbl_video_progress.hide()
+            self._update_video_timeline_ui()
             box_count = len(self.canvas.rects) if hasattr(self, "canvas") else 0
             self.lbl_box_count.setText(f"Boxes: {box_count}")
             class_count = len(self._class_names)
